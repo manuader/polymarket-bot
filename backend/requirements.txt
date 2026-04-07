@@ -1,0 +1,24 @@
+# Web framework
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.1
+greenlet==3.1.1
+
+# HTTP & WebSocket clients
+httpx==0.28.1
+websockets==14.1
+
+# AI
+anthropic==0.43.0
+
+# Config
+pydantic-settings==2.7.1
+python-dotenv==1.0.1
+
+# Utilities
+orjson==3.10.13
+structlog==24.4.0
