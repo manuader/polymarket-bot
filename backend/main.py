@@ -2,7 +2,7 @@ import asyncio
 
 import structlog
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings
@@ -12,6 +12,13 @@ from pipeline.volume_tracker import run_volume_tracker
 from pipeline.wallet_profiler import run_wallet_profiler
 from pipeline.websocket_client import WebSocketManager, parse_ws_trade
 from pipeline.orderbook_cache import run_orderbook_cache
+from detection.signal_manager import run_detection_engine, scan_recent_trades, trade_queue
+from trading.paper_engine import run_paper_engine
+from api.routes.dashboard import router as dashboard_router
+from api.routes.signals import router as signals_router
+from api.routes.trades import router as trades_router
+from api.routes.analytics import router as analytics_router
+from api.websocket import websocket_endpoint
 
 settings = get_settings()
 
@@ -35,7 +42,7 @@ async def on_ws_message(msg: dict):
         try:
             price_queue.put_nowait(parsed)
         except asyncio.QueueFull:
-            pass  # Drop oldest if queue is full
+            pass
 
 
 @asynccontextmanager
@@ -49,21 +56,32 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.error("initial_market_sync_failed", error=str(e))
 
-    # Start all pipeline background tasks
+    # Start all background tasks
     ws_manager = WebSocketManager(on_message_callback=on_ws_message)
     tasks = [
+        # Data pipeline
         asyncio.create_task(run_market_sync(300), name="market-sync"),
         asyncio.create_task(run_trade_enricher(60), name="trade-enricher"),
         asyncio.create_task(run_volume_tracker(60), name="volume-tracker"),
         asyncio.create_task(run_wallet_profiler(120), name="wallet-profiler"),
         asyncio.create_task(run_orderbook_cache(get_all_token_ids, 60), name="orderbook-cache"),
+        # Detection engine
+        asyncio.create_task(run_detection_engine(), name="detection-engine"),
+        # Paper trading engine
+        asyncio.create_task(run_paper_engine(), name="paper-engine"),
     ]
 
-    # Start WebSocket connections
+    # Start WebSocket connections to Polymarket
     try:
         await ws_manager.start()
     except Exception as e:
         log.error("ws_start_failed", error=str(e))
+
+    # Scan recent trades for signals on startup
+    try:
+        await scan_recent_trades()
+    except Exception as e:
+        log.error("initial_scan_failed", error=str(e))
 
     app.state.ws_manager = ws_manager
     app.state.price_queue = price_queue
@@ -92,6 +110,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register API routes
+app.include_router(dashboard_router)
+app.include_router(signals_router)
+app.include_router(trades_router)
+app.include_router(analytics_router)
+
+
+# WebSocket endpoint for frontend real-time updates
+@app.websocket("/ws")
+async def ws(websocket: WebSocket):
+    await websocket_endpoint(websocket)
 
 
 @app.get("/health")
