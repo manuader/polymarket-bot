@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:docs.polymarket.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:docs.dune.com)",
+      "Bash(python3 -m venv venv)",
+      "Bash(source venv/bin/activate)",
+      "Bash(pip install:*)",
+      "Bash(alembic revision:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(docker compose:*)",
+      "Bash(psql -U postgres -c \"SELECT 1\")",
+      "Bash(psql -c \"SELECT 1\")",
+      "Bash(docker ps:*)",
+      "Bash(alembic upgrade:*)",
+      "Bash(source /Users/manuader/Desktop/projects/polymarket/venv/bin/activate)",
+      "Bash(PGPASSWORD=polymarket psql -h localhost -p 5433 -U polymarket -d polymarket_bot -c \"\\\\dt\" 2>&1)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(python -c \":*)",
+      "Bash(curl:*)",
+      "Bash(nslookup gamma-api.polymarket.com)",
+      "WebFetch(domain:gist.github.com)"
+    ]
+  }
+}

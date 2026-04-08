@@ -243,6 +243,26 @@ async def analyze_with_ai(
 
         _increment_daily_count()
 
+        # Track token usage
+        from activity import record_ai_usage, log_activity
+        input_tokens = getattr(response.usage, "input_tokens", 0)
+        output_tokens = getattr(response.usage, "output_tokens", 0)
+        record_ai_usage(input_tokens, output_tokens)
+
+        await log_activity(
+            event_type="ai_analysis",
+            severity="info",
+            title=f"AI analyzed: {market.question[:60] if market.question else market.condition_id[:12]}",
+            detail=f"Model: {MODEL}. Input tokens: {input_tokens}. Output tokens: {output_tokens}.",
+            market_id=market.condition_id,
+            metadata={
+                "model": MODEL,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "daily_calls": _daily_calls["count"],
+            },
+        )
+
         # Extract text from response
         text = ""
         for block in response.content:

@@ -23,7 +23,7 @@ GAMMA_EVENTS_URL = f"{settings.gamma_api_url}/events"
 PAGE_SIZE = 100
 
 
-async def fetch_all_active_markets(client: httpx.AsyncClient) -> list[dict]:
+async def fetch_all_active_markets(client: httpx.AsyncClient, max_pages: int = 20) -> list[dict]:
     """Fetch all active markets from Gamma API with pagination."""
     all_markets = []
     offset = 0
@@ -46,6 +46,9 @@ async def fetch_all_active_markets(client: httpx.AsyncClient) -> list[dict]:
         offset += PAGE_SIZE
 
         if len(markets) < PAGE_SIZE:
+            break
+
+        if len(all_markets) >= max_pages * PAGE_SIZE:
             break
 
     return all_markets
@@ -73,7 +76,16 @@ def parse_market(raw: dict) -> dict:
     if not clob_token_ids:
         raw_ids = raw.get("clobTokenIds")
         if isinstance(raw_ids, str):
-            clob_token_ids = [x.strip() for x in raw_ids.split(",") if x.strip()]
+            # Gamma API returns this as a JSON string: '["id1", "id2"]'
+            try:
+                import json as _json
+                parsed_ids = _json.loads(raw_ids)
+                if isinstance(parsed_ids, list):
+                    clob_token_ids = [str(x).strip() for x in parsed_ids if x]
+                else:
+                    clob_token_ids = [x.strip() for x in raw_ids.split(",") if x.strip()]
+            except (ValueError, TypeError):
+                clob_token_ids = [x.strip().strip('"[]') for x in raw_ids.split(",") if x.strip()]
         elif isinstance(raw_ids, list):
             clob_token_ids = raw_ids
 
@@ -82,8 +94,13 @@ def parse_market(raw: dict) -> dict:
         raw_prices = raw.get("outcomePrices")
         if isinstance(raw_prices, str):
             try:
-                outcome_prices = [float(x.strip()) for x in raw_prices.split(",") if x.strip()]
-            except (TypeError, ValueError):
+                import json as _json
+                parsed_prices = _json.loads(raw_prices)
+                if isinstance(parsed_prices, list):
+                    outcome_prices = [float(x) for x in parsed_prices]
+                else:
+                    outcome_prices = [float(x.strip()) for x in raw_prices.split(",") if x.strip()]
+            except (ValueError, TypeError):
                 outcome_prices = []
         elif isinstance(raw_prices, list):
             outcome_prices = [float(x) for x in raw_prices]
@@ -174,7 +191,7 @@ async def get_all_token_ids() -> list[str]:
 
 async def sync_once():
     """Run a single sync cycle."""
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=60) as client:
         raw_markets = await fetch_all_active_markets(client)
         parsed = [parse_market(m) for m in raw_markets]
         parsed = [m for m in parsed if m["condition_id"]]

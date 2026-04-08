@@ -98,6 +98,7 @@ class WebSocketManager:
             settings.clob_ws_url,
             ping_interval=None,  # we handle heartbeats manually
             close_timeout=10,
+            max_size=10 * 1024 * 1024,  # 10MB to handle large initial state messages
         ) as ws:
             # Subscribe to market channel
             if token_ids:
@@ -142,7 +143,13 @@ class WebSocketManager:
 
                     try:
                         data = json.loads(raw)
-                        await self.on_message(data)
+                        # WS can send a single dict or a list of events
+                        if isinstance(data, list):
+                            for item in data:
+                                if isinstance(item, dict):
+                                    await self.on_message(item)
+                        elif isinstance(data, dict):
+                            await self.on_message(data)
                     except json.JSONDecodeError:
                         pass
             finally:

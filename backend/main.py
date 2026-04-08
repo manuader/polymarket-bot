@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings
 from pipeline.market_sync import run_market_sync, sync_once, get_all_token_ids
-from pipeline.trade_enricher import run_trade_enricher
+from pipeline.trade_enricher import run_trade_enricher, set_on_new_trades_callback
 from pipeline.volume_tracker import run_volume_tracker
 from pipeline.wallet_profiler import run_wallet_profiler
 from pipeline.websocket_client import WebSocketManager, parse_ws_trade
@@ -18,6 +18,7 @@ from api.routes.dashboard import router as dashboard_router
 from api.routes.signals import router as signals_router
 from api.routes.trades import router as trades_router
 from api.routes.analytics import router as analytics_router
+from api.routes.activity import router as activity_router
 from api.websocket import websocket_endpoint
 
 settings = get_settings()
@@ -49,19 +50,29 @@ async def on_ws_message(msg: dict):
 async def lifespan(app: FastAPI):
     log.info("starting_polymarket_bot", min_score=settings.min_score_to_trade)
 
-    # Initial market sync before starting other tasks
+    # Initial market sync (with timeout so it doesn't block startup)
     try:
-        count = await sync_once()
+        count = await asyncio.wait_for(sync_once(), timeout=120)
         log.info("initial_market_sync", markets=count)
+    except asyncio.TimeoutError:
+        log.warning("initial_market_sync_timeout", msg="Continuing startup, will retry in background")
     except Exception as e:
         log.error("initial_market_sync_failed", error=str(e))
+
+    # Connect trade enricher → detection engine
+    async def on_new_trade(trade):
+        try:
+            trade_queue.put_nowait(trade)
+        except asyncio.QueueFull:
+            pass
+    set_on_new_trades_callback(on_new_trade)
 
     # Start all background tasks
     ws_manager = WebSocketManager(on_message_callback=on_ws_message)
     tasks = [
         # Data pipeline
         asyncio.create_task(run_market_sync(300), name="market-sync"),
-        asyncio.create_task(run_trade_enricher(60), name="trade-enricher"),
+        asyncio.create_task(run_trade_enricher(30), name="trade-enricher"),  # poll every 30s
         asyncio.create_task(run_volume_tracker(60), name="volume-tracker"),
         asyncio.create_task(run_wallet_profiler(120), name="wallet-profiler"),
         asyncio.create_task(run_orderbook_cache(get_all_token_ids, 60), name="orderbook-cache"),
@@ -116,6 +127,7 @@ app.include_router(dashboard_router)
 app.include_router(signals_router)
 app.include_router(trades_router)
 app.include_router(analytics_router)
+app.include_router(activity_router)
 
 
 # WebSocket endpoint for frontend real-time updates

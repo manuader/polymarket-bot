@@ -239,3 +239,25 @@ class CircuitBreakerState(Base):
     daily_pnl_pct = Column(Float, nullable=False)
     is_tripped = Column(Boolean, default=False)
     tripped_at = Column(DateTime(timezone=True))
+
+
+# ── Bot Activity Log ─────────────────────────────────────────────────
+
+class BotActivity(Base):
+    __tablename__ = "bot_activity"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    event_type = Column(String, nullable=False)  # trade_ingested, signal_detected, ai_analysis, position_opened, position_closed, error
+    severity = Column(String, default="info")     # info, warning, alert, error
+    title = Column(String, nullable=False)
+    detail = Column(Text)
+    market_id = Column(String)
+    signal_id = Column(Integer)
+    trade_id = Column(Integer)
+    metadata_json = Column(Text)  # JSON string for extra data (AI tokens, costs, etc.)
+
+    __table_args__ = (
+        Index("idx_activity_time", "timestamp"),
+        Index("idx_activity_type", "event_type"),
+    )

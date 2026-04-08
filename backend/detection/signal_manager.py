@@ -15,6 +15,7 @@ from db.database import async_session
 from db.models import Trade, Signal, Market, Wallet
 from detection.heuristic_filter import evaluate_trade, RuleHit
 from detection.ai_analyzer import analyze_with_ai
+from activity import log_activity
 
 log = structlog.get_logger()
 settings = get_settings()
@@ -201,6 +202,26 @@ async def create_signal(
             volume=total_volume,
         )
 
+        # Log to activity feed
+        await log_activity(
+            event_type="signal_detected",
+            severity="alert" if score >= 7 else "warning",
+            title=f"Signal score {score}: {market.question[:80] if market.question else market.condition_id[:12]}",
+            detail=f"Rules: {signal_type}. Direction: {direction}. Confidence: {confidence:.0%}. Recommendation: {recommendation}. {analysis}",
+            market_id=market.condition_id,
+            signal_id=signal.id,
+            metadata={
+                "score": score,
+                "confidence": confidence,
+                "direction": direction,
+                "recommendation": recommendation,
+                "rules": signal_type.split("+"),
+                "volume": total_volume,
+                "wallets": all_wallets[:5],
+                "key_findings": key_findings,
+            },
+        )
+
         return signal
 
 
@@ -210,6 +231,15 @@ async def process_trade(trade: Trade) -> Signal | None:
     hits = await evaluate_trade(trade)
     if not hits:
         return None
+
+    await log_activity(
+        event_type="trade_flagged",
+        severity="info",
+        title=f"Trade ${trade.usd_value:,.0f} flagged by {len(hits)} rule(s)",
+        detail=f"Market: {trade.market_id[:16]}. Rules: {', '.join(h.rule_name for h in hits)}. Wallet: {(trade.taker_address or 'unknown')[:12]}...",
+        market_id=trade.market_id,
+        metadata={"usd_value": trade.usd_value, "rules": [h.rule_name for h in hits]},
+    )
 
     # Step 2: Load market and wallet data for AI analysis
     async with async_session() as session:
