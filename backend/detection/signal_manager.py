@@ -250,7 +250,8 @@ async def process_trade(trade: Trade) -> Signal | None:
         if not market:
             return None
 
-        # Load wallet profiles for triggered wallets
+        # Wallet profiles are already cached in DB from the heuristic step
+        # (profile_wallet_from_api was called by each rule that needed it)
         all_wallet_addrs = list(set(w for h in hits for w in h.trigger_wallets if w))
         wallets = []
         for addr in all_wallet_addrs:

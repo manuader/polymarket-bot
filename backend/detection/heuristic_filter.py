@@ -15,6 +15,7 @@ from db.database import async_session
 from db.models import Trade, Wallet, Market, MarketVolumeSnapshot
 from detection.rules_config import thresholds
 from pipeline.volume_tracker import get_avg_24h_volume, get_latest_snapshot
+from pipeline.wallet_profiler import profile_wallet_from_api
 
 log = structlog.get_logger()
 
@@ -32,7 +33,8 @@ class RuleHit:
 
 
 async def rule_whale_new_account(trade: Trade) -> RuleHit | None:
-    """Rule 1: Large trade from a new wallet with few trades."""
+    """Rule 1: Large trade from a new wallet with few trades.
+    Fetches REAL wallet profile from Polymarket Data API."""
     if trade.usd_value < thresholds.whale_new_account_min_usd:
         return None
 
@@ -40,14 +42,11 @@ async def rule_whale_new_account(trade: Trade) -> RuleHit | None:
     if not address:
         return None
 
-    async with async_session() as session:
-        result = await session.execute(
-            select(Wallet).where(Wallet.address == address)
-        )
-        wallet = result.scalar_one_or_none()
+    # Fetch real profile from Polymarket API
+    profile = await profile_wallet_from_api(address)
 
-    if not wallet:
-        # No profile yet — treat as brand new
+    if not profile or profile.get("total_trades", 0) == 0:
+        # Brand new wallet with no history at all
         return RuleHit(
             rule_name="WHALE_NEW_ACCOUNT",
             priority=thresholds.whale_new_account_priority,
@@ -56,11 +55,19 @@ async def rule_whale_new_account(trade: Trade) -> RuleHit | None:
             trigger_wallets=[address],
             trigger_trade_ids=[trade.id] if trade.id else [],
             total_suspicious_volume=trade.usd_value,
-            metadata={"wallet_age_days": 0, "wallet_trades": 0},
+            metadata={"wallet_age_days": 0, "wallet_trades": 0, "wallet_volume": 0},
         )
 
-    age = datetime.now(timezone.utc) - wallet.first_seen if wallet.first_seen else timedelta(0)
-    if age.days < thresholds.whale_new_account_age_days and wallet.total_trades < thresholds.whale_new_account_max_trades:
+    first_seen = profile.get("first_seen", datetime.now(timezone.utc))
+    if isinstance(first_seen, str):
+        first_seen = datetime.fromisoformat(first_seen)
+    if first_seen.tzinfo is None:
+        first_seen = first_seen.replace(tzinfo=timezone.utc)
+
+    age = datetime.now(timezone.utc) - first_seen
+    total_trades = profile.get("total_trades", 0)
+
+    if age.days < thresholds.whale_new_account_age_days and total_trades < thresholds.whale_new_account_max_trades:
         return RuleHit(
             rule_name="WHALE_NEW_ACCOUNT",
             priority=thresholds.whale_new_account_priority,
@@ -69,7 +76,14 @@ async def rule_whale_new_account(trade: Trade) -> RuleHit | None:
             trigger_wallets=[address],
             trigger_trade_ids=[trade.id] if trade.id else [],
             total_suspicious_volume=trade.usd_value,
-            metadata={"wallet_age_days": age.days, "wallet_trades": wallet.total_trades},
+            metadata={
+                "wallet_age_days": age.days,
+                "wallet_trades": total_trades,
+                "wallet_volume": profile.get("total_volume", 0),
+                "wallet_markets": profile.get("markets_traded", 0),
+                "wallet_win_rate": profile.get("win_rate"),
+                "wallet_topics": profile.get("top_topics", []),
+            },
         )
 
     return None
@@ -126,16 +140,13 @@ async def rule_pre_announcement(trade: Trade) -> RuleHit | None:
     if time_remaining.total_seconds() > thresholds.pre_announcement_hours * 3600:
         return None
 
-    # Check if wallet is new/small
+    # Check if wallet is new/small using real API data
     address = trade.taker_address or trade.maker_address
     if not address:
         return None
 
-    async with async_session() as session:
-        result = await session.execute(select(Wallet).where(Wallet.address == address))
-        wallet = result.scalar_one_or_none()
-
-    is_new = not wallet or (wallet.total_trades < 10)
+    profile = await profile_wallet_from_api(address)
+    is_new = not profile or profile.get("total_trades", 0) < 10
 
     if is_new:
         return RuleHit(
@@ -200,18 +211,23 @@ async def rule_coordinated_wallets(trade: Trade) -> RuleHit | None:
         if len(recent_wallets) < thresholds.coordinated_min_wallets:
             return None
 
-        # Check how many are new (< 7 days old or not in wallet table)
+        # Check how many are new using real API data
         new_wallets = []
         total_volume = 0
 
         for addr, vol, count in recent_wallets:
             total_volume += float(vol)
-            wallet_result = await session.execute(
-                select(Wallet).where(Wallet.address == addr)
-            )
-            wallet = wallet_result.scalar_one_or_none()
-            if not wallet or (wallet.first_seen and (datetime.now(timezone.utc) - wallet.first_seen).days < 7):
+            profile = await profile_wallet_from_api(addr)
+            if not profile or profile.get("total_trades", 0) == 0:
                 new_wallets.append(addr)
+            elif profile.get("first_seen"):
+                fs = profile["first_seen"]
+                if isinstance(fs, str):
+                    fs = datetime.fromisoformat(fs)
+                if fs.tzinfo is None:
+                    fs = fs.replace(tzinfo=timezone.utc)
+                if (datetime.now(timezone.utc) - fs).days < 7:
+                    new_wallets.append(addr)
 
         if len(new_wallets) >= thresholds.coordinated_min_wallets and total_volume >= thresholds.coordinated_min_combined_usd:
             return RuleHit(
@@ -228,7 +244,8 @@ async def rule_coordinated_wallets(trade: Trade) -> RuleHit | None:
 
 
 async def rule_high_win_rate_whale(trade: Trade) -> RuleHit | None:
-    """Rule 6: High win rate wallet making a large trade."""
+    """Rule 6: High win rate wallet making a large trade.
+    Uses real API data for accurate win rate."""
     if trade.usd_value < thresholds.high_wr_min_usd:
         return None
 
@@ -236,14 +253,14 @@ async def rule_high_win_rate_whale(trade: Trade) -> RuleHit | None:
     if not address:
         return None
 
-    async with async_session() as session:
-        result = await session.execute(select(Wallet).where(Wallet.address == address))
-        wallet = result.scalar_one_or_none()
-
-    if not wallet or wallet.win_rate is None:
+    profile = await profile_wallet_from_api(address)
+    if not profile or profile.get("win_rate") is None:
         return None
 
-    if wallet.win_rate >= thresholds.high_wr_min_rate and wallet.total_trades >= thresholds.high_wr_min_trades:
+    win_rate = profile["win_rate"]
+    total_trades = profile.get("total_trades", 0)
+
+    if win_rate >= thresholds.high_wr_min_rate and total_trades >= thresholds.high_wr_min_trades:
         return RuleHit(
             rule_name="HIGH_WIN_RATE_WHALE",
             priority=thresholds.high_wr_priority,
@@ -252,7 +269,13 @@ async def rule_high_win_rate_whale(trade: Trade) -> RuleHit | None:
             trigger_wallets=[address],
             trigger_trade_ids=[trade.id] if trade.id else [],
             total_suspicious_volume=trade.usd_value,
-            metadata={"win_rate": wallet.win_rate, "total_trades": wallet.total_trades},
+            metadata={
+                "win_rate": win_rate,
+                "total_trades": total_trades,
+                "total_volume": profile.get("total_volume", 0),
+                "markets_traded": profile.get("markets_traded", 0),
+                "top_topics": profile.get("top_topics", []),
+            },
         )
 
     return None
