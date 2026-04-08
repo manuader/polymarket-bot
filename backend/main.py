@@ -14,6 +14,8 @@ from pipeline.websocket_client import WebSocketManager, parse_ws_trade
 from pipeline.orderbook_cache import run_orderbook_cache
 from detection.signal_manager import run_detection_engine, scan_recent_trades, trade_queue
 from trading.paper_engine import run_paper_engine
+from trading.cleanup import run_cleanup
+from trading.outcome_tracker import run_outcome_tracker
 from api.routes.dashboard import router as dashboard_router
 from api.routes.signals import router as signals_router
 from api.routes.trades import router as trades_router
@@ -72,7 +74,7 @@ async def lifespan(app: FastAPI):
     tasks = [
         # Data pipeline
         asyncio.create_task(run_market_sync(300), name="market-sync"),
-        asyncio.create_task(run_trade_enricher(30), name="trade-enricher"),  # poll every 30s
+        asyncio.create_task(run_trade_enricher(15), name="trade-enricher"),  # poll every 15s
         asyncio.create_task(run_volume_tracker(60), name="volume-tracker"),
         asyncio.create_task(run_wallet_profiler(120), name="wallet-profiler"),
         asyncio.create_task(run_orderbook_cache(get_all_token_ids, 60), name="orderbook-cache"),
@@ -80,6 +82,9 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(run_detection_engine(), name="detection-engine"),
         # Paper trading engine
         asyncio.create_task(run_paper_engine(), name="paper-engine"),
+        # Cleanup old trades & track outcomes for learning
+        asyncio.create_task(run_cleanup(), name="trade-cleanup"),
+        asyncio.create_task(run_outcome_tracker(), name="outcome-tracker"),
     ]
 
     # Start WebSocket connections to Polymarket

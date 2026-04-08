@@ -85,3 +85,10 @@ async def bot_stats(session: AsyncSession = Depends(get_session)):
         "trades_in_db": trade_count,
         "activity_counts": activity_counts,
     }
+
+
+@router.get("/learning")
+async def learning_summary():
+    """What the bot has learned from past signal outcomes."""
+    from trading.outcome_tracker import get_learning_summary
+    return await get_learning_summary()
