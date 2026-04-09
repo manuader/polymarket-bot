@@ -10,30 +10,30 @@ El sistema **NO ejecuta trades reales**. Todo es simulación sobre datos reales 
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    DATA INGESTION                        │
-│                                                          │
-│  Gamma API (cada 5min) ──► 2000 mercados activos en DB   │
-│  Data API (cada 15s) ───► trades nuevos en DB             │
-│  CLOB WebSocket (8 conn) ──► price updates en real-time   │
-│  Order Book cache (cada 60s) ──► slippage dinámico        │
-└───────────────────────┬──────────────────────────────────┘
+│                    DATA INGESTION                       │
+│                                                         │
+│  Gamma API (cada 5min) ──► 2000 mercados activos en DB  │
+│  Data API (cada 15s) ───► trades nuevos en DB           │
+│  CLOB WebSocket (8 conn) ──► price updates en real-time │
+│  Order Book cache (cada 60s) ──► slippage dinámico      │
+└───────────────────────┬─────────────────────────────────┘
                         │
             (solo trades >= $10,000 USD)
                         ▼
-┌─────────────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────────────────┐
 │              FILTRO 1: 8 REGLAS HEURÍSTICAS              │
 │                                                          │
 │  Con wallet (perfil REAL de Polymarket API):              │
 │  1. WHALE_NEW_ACCOUNT — wallet < 7 días + < 5 trades     │
-│  3. PRE_ANNOUNCEMENT — < 48h a resolución + wallet nueva  │
-│  5. COORDINATED_WALLETS — 3+ wallets nuevas coordinadas   │
-│  6. HIGH_WIN_RATE — win rate > 85% + > 10 trades          │
+│  3. PRE_ANNOUNCEMENT — < 48h a resolución + wallet nueva │
+│  5. COORDINATED_WALLETS — 3+ wallets nuevas coordinadas  │
+│  6. HIGH_WIN_RATE — win rate > 85% + > 10 trades         │
 │                                                          │
-│  Sin wallet (solo precio/volumen):                        │
-│  2. VOLUME_SPIKE — vol 1h > 3x promedio                   │
-│  4. IMPROBABLE_BET — apuesta > $10k a < 15% prob          │
-│  7. PRICE_REVERSAL — spike > 10% + reversión > 50%        │
-│  8. BET_AGAINST_CONSENSUS — contra > 80% de consenso      │
+│  Sin wallet (solo precio/volumen):                       │
+│  2. VOLUME_SPIKE — vol 1h > 3x promedio                  │
+│  4. IMPROBABLE_BET — apuesta > $10k a < 15% prob         │
+│  7. PRICE_REVERSAL — spike > 10% + reversión > 50%       │
+│  8. BET_AGAINST_CONSENSUS — contra > 80% de consenso     │
 │                                                          │
 │  ~95% descartados, ~5% pasan al filtro 2                  │
 └───────────────────────┬──────────────────────────────────┘
@@ -41,59 +41,59 @@ El sistema **NO ejecuta trades reales**. Todo es simulación sobre datos reales 
                         │  (si prioridad >= 6)
                         ▼
 ┌─────────────────────────────────────────────────────────┐
-│        FILTRO 2: CLAUDE SONNET + WEB SEARCH              │
-│                                                          │
-│  Recibe:                                                  │
-│  • Reglas disparadas + metadata                           │
-│  • Mercado: pregunta, categoría, fecha resolución         │
-│  • Perfil real del wallet: antigüedad, # trades,          │
-│    volumen, win rate, mercados, temas favoritos           │
-│  • Contexto de volumen                                    │
-│                                                          │
-│  Busca en la web: noticias, anuncios próximos,            │
-│  quién tendría info privilegiada                          │
-│                                                          │
-│  Output: score 1-10, confidence, recommendation           │
-│  Cache: 6h por mercado | Límite: 50 calls/día             │
-└───────────────────────┬──────────────────────────────────┘
+│        FILTRO 2: CLAUDE SONNET + WEB SEARCH             │
+│                                                         │
+│  Recibe:                                                │
+│  • Reglas disparadas + metadata                         │
+│  • Mercado: pregunta, categoría, fecha resolución       │
+│  • Perfil real del wallet: antigüedad, # trades,         │
+│    volumen, win rate, mercados, temas favoritos         │
+│  • Contexto de volumen                                  │
+│                                                         │
+│  Busca en la web: noticias, anuncios próximos,          │
+│  quién tendría info privilegiada                        │
+│                                                         │
+│  Output: score 1-10, confidence, recommendation          │
+│  Cache: 6h por mercado | Límite: 50 calls/día           │
+└───────────────────────┬─────────────────────────────────┘
                         │
                         │  (si score final >= 5)
                         ▼
 ┌─────────────────────────────────────────────────────────┐
-│              PAPER TRADING ENGINE                         │
-│                                                          │
-│  Position sizing (Half-Kelly):                            │
-│  • Score 5-6 → max 3%  │  Score 7 → max 7%               │
-│  • Score 8-10 → max 20% │  × AI confidence                │
-│                                                          │
-│  Pre-checks:                                              │
-│  • Circuit breaker: stop si P&L día < -5%                 │
-│  • Max 10 posiciones abiertas                             │
-│  • Concentración por categoría < 40%                      │
-│                                                          │
-│  6 condiciones de salida (cada 60s):                      │
-│  1. Mercado resuelto → $1.00 o $0.00                      │
-│  2. Trailing stop: profit > 40% → stop a breakeven        │
-│  3. Stop loss: -30% (score ≥ 8) o -50% (score < 8)       │
-│  4. Take profit: 80% del potencial máximo                 │
-│  5. Near-resolution: < 30min + profit → cerrar            │
-│  6. Time decay: > 14 días → cerrar                        │
-└───────────────────────┬──────────────────────────────────┘
+│              PAPER TRADING ENGINE                       │
+│                                                         │
+│  Position sizing (Half-Kelly):                          │
+│  • Score 5-6 → max 3%  │  Score 7 → max 7%              │
+│  • Score 8-10 → max 20% │  × AI confidence               │
+│                                                         │
+│  Pre-checks:                                            │
+│  • Circuit breaker: stop si P&L día < -5%               │
+│  • Max 10 posiciones abiertas                           │
+│  • Concentración por categoría < 40%                    │
+│                                                         │
+│  6 condiciones de salida (cada 60s):                    │
+│  1. Mercado resuelto → $1.00 o $0.00                    │
+│  2. Trailing stop: profit > 40% → stop a breakeven       │
+│  3. Stop loss: -30% (score ≥ 8) o -50% (score < 8)      │
+│  4. Take profit: 80% del potencial máximo                │
+│  5. Near-resolution: < 30min + profit → cerrar           │
+│  6. Time decay: > 14 días → cerrar                      │
+└───────────────────────┬─────────────────────────────────┘
                         │
                         ▼
 ┌─────────────────────────────────────────────────────────┐
-│              LEARNING & MAINTENANCE                       │
-│                                                          │
-│  Outcome tracker (cada 5min):                             │
-│  • Compara predicciones vs resultados reales              │
-│  • Registra WIN/LOSS por señal y por regla                │
-│  • Calibra Kelly sizing con datos reales                  │
-│                                                          │
-│  Cleanup (cada 1h):                                       │
-│  • Borra trades > 24h sin señales vinculadas              │
-│  • Mantiene trades de señales para aprendizaje            │
-│                                                          │
-│  Activity feed: log de todo con costos de AI              │
+│              LEARNING & MAINTENANCE                     │
+│                                                         │
+│  Outcome tracker (cada 5min):                           │
+│  • Compara predicciones vs resultados reales            │
+│  • Registra WIN/LOSS por señal y por regla              │
+│  • Calibra Kelly sizing con datos reales                │
+│                                                         │
+│  Cleanup (cada 1h):                                     │
+│  • Borra trades > 24h sin señales vinculadas            │
+│  • Mantiene trades de señales para aprendizaje          │
+│                                                         │
+│  Activity feed: log de todo con costos de AI            │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -101,16 +101,16 @@ El sistema **NO ejecuta trades reales**. Todo es simulación sobre datos reales 
 
 ## Stack
 
-| Componente | Tecnología |
-|------------|-----------|
-| Backend | Python 3.11+, FastAPI, SQLAlchemy 2.0 async |
-| Base de datos | PostgreSQL 15 |
-| Frontend | React 18, Tailwind CSS, Recharts |
-| AI | Claude Sonnet (Anthropic API) con web search |
-| WebSocket | websockets (Python), 8 conexiones paralelas |
-| HTTP | httpx (async) |
-| Migrations | Alembic |
-| Containers | Docker Compose |
+| Componente      | Tecnología                                   |
+|-----------------|----------------------------------------------|
+| Backend         | Python 3.11+, FastAPI, SQLAlchemy 2.0 async  |
+| Base de datos   | PostgreSQL 15                                |
+| Frontend        | React 18, Tailwind CSS, Recharts             |
+| AI              | Claude Sonnet (Anthropic API) con web search |
+| WebSocket       | websockets (Python), 8 conexiones paralelas  |
+| HTTP            | httpx (async)                                |
+| Migrations      | Alembic                                      |
+| Containers      | Docker Compose                               |
 
 ---
 
@@ -272,22 +272,22 @@ Abrir http://localhost:5173
 
 Todas las variables están en `.env`:
 
-| Variable | Default | Descripción |
-|----------|---------|-------------|
-| `DATABASE_URL` | `...localhost:5433/...` | PostgreSQL connection string |
-| `ANTHROPIC_API_KEY` | - | API key de Anthropic (requerida para AI) |
-| `MIN_TRADE_USD` | 10000 | Monto mínimo para analizar un trade |
-| `MIN_SCORE_TO_TRADE` | 5 | Score mínimo para abrir paper trade |
-| `MAX_AI_CALLS_PER_DAY` | 50 | Límite de invocaciones a Claude |
-| `INITIAL_BALANCE` | 10000 | Balance inicial del paper trading (USDC) |
-| `MAX_POSITION_PCT` | 20 | % máximo del portfolio por posición |
-| `MAX_POSITIONS` | 10 | Máximo posiciones abiertas simultáneas |
-| `STOP_LOSS_PCT_HIGH` | 30 | Stop loss % para scores >= 8 |
-| `STOP_LOSS_PCT_LOW` | 50 | Stop loss % para scores < 8 |
-| `TAKE_PROFIT_PCT` | 80 | Take profit % del potencial máximo |
-| `TRAILING_STOP_TRIGGER_PCT` | 40 | Profit % para activar trailing stop |
-| `CIRCUIT_BREAKER_PCT` | 5 | Stop trading si P&L día < -X% |
-| `CATEGORY_CONCENTRATION_MAX_PCT` | 40 | Max % del portfolio en una categoría |
+| Variable                         | Default                 | Descripción                              |
+|----------------------------------|-------------------------|------------------------------------------|
+| `DATABASE_URL`                   | `...localhost:5433/...` | PostgreSQL connection string             |
+| `ANTHROPIC_API_KEY`              | -                       | API key de Anthropic (requerida para AI) |
+| `MIN_TRADE_USD`                  | 10000                   | Monto mínimo para analizar un trade      |
+| `MIN_SCORE_TO_TRADE`             | 5                       | Score mínimo para abrir paper trade      |
+| `MAX_AI_CALLS_PER_DAY`           | 50                      | Límite de invocaciones a Claude          |
+| `INITIAL_BALANCE`                | 10000                   | Balance inicial del paper trading (USDC) |
+| `MAX_POSITION_PCT`               | 20                      | % máximo del portfolio por posición      |
+| `MAX_POSITIONS`                  | 10                      | Máximo posiciones abiertas simultáneas   |
+| `STOP_LOSS_PCT_HIGH`             | 30                      | Stop loss % para scores >= 8             |
+| `STOP_LOSS_PCT_LOW`              | 50                      | Stop loss % para scores < 8              |
+| `TAKE_PROFIT_PCT`                | 80                      | Take profit % del potencial máximo        |
+| `TRAILING_STOP_TRIGGER_PCT`      | 40                      | Profit % para activar trailing stop       |
+| `CIRCUIT_BREAKER_PCT`            | 5                       | Stop trading si P&L día < -X%            |
+| `CATEGORY_CONCENTRATION_MAX_PCT` | 40                      | Max % del portfolio en una categoría     |
 
 ---
 
@@ -295,41 +295,41 @@ Todas las variables están en `.env`:
 
 El backend ejecuta 10 tasks en paralelo:
 
-| Task | Frecuencia | Función |
-|------|-----------|---------|
-| Market sync | 5 min | Sincroniza mercados de Gamma API |
-| Trade enricher | 15 seg | Trae trades nuevos de Data API |
-| Volume tracker | 60 seg | Snapshots de volumen por mercado |
-| Wallet profiler | On-demand | Perfil real via API al detectar trade sospechoso |
-| Orderbook cache | 60 seg | Depth para slippage dinámico |
-| WebSocket | Real-time | 8 conexiones, 4000 tokens suscritos |
-| Detection engine | Continuo | Procesa trades de la queue |
-| Paper engine | 60 seg | Chequea condiciones de salida |
-| Outcome tracker | 5 min | Registra wins/losses para calibración |
-| Cleanup | 1 hora | Purga trades viejos sin señales |
+| Task             | Frecuencia | Función                                         |
+|------------------|------------|-------------------------------------------------|
+| Market sync      | 5 min      | Sincroniza mercados de Gamma API                |
+| Trade enricher   | 15 seg     | Trae trades nuevos de Data API                  |
+| Volume tracker   | 60 seg     | Snapshots de volumen por mercado                |
+| Wallet profiler   | On-demand  | Perfil real via API al detectar trade sospechoso |
+| Orderbook cache  | 60 seg     | Depth para slippage dinámico                    |
+| WebSocket        | Real-time  | 8 conexiones, 4000 tokens suscritos             |
+| Detection engine | Continuo   | Procesa trades de la queue                      |
+| Paper engine     | 60 seg     | Chequea condiciones de salida                   |
+| Outcome tracker  | 5 min      | Registra wins/losses para calibración           |
+| Cleanup          | 1 hora     | Purga trades viejos sin señales                 |
 
 ---
 
 ## API Endpoints
 
-| Método | Endpoint | Descripción |
-|--------|----------|-------------|
-| GET | `/health` | Health check |
-| GET | `/api/dashboard/summary` | Portfolio + métricas del día |
-| GET | `/api/dashboard/equity-curve` | Valor del portfolio en el tiempo |
-| GET | `/api/dashboard/active-signals` | Señales últimas 24h |
-| GET | `/api/dashboard/open-positions` | Posiciones abiertas con P&L |
-| GET | `/api/signals/` | Lista de señales (filtros: score, status, category) |
-| GET | `/api/signals/{id}` | Detalle de una señal |
-| GET | `/api/trades/` | Historial de paper trades |
-| GET | `/api/analytics/performance` | Métricas: win rate, Sharpe, drawdown |
-| GET | `/api/analytics/by-category` | P&L por categoría de mercado |
-| GET | `/api/analytics/by-score` | P&L por bracket de score |
-| GET | `/api/analytics/return-distribution` | Histograma de retornos |
-| GET | `/api/activity/feed` | Activity feed del bot |
-| GET | `/api/activity/stats` | Stats: AI calls, tokens, costos |
-| GET | `/api/activity/learning` | Qué aprendió el bot de sus resultados |
-| WS | `/ws` | WebSocket para updates real-time al frontend |
+| Método | Endpoint                             | Descripción                                        |
+|--------|--------------------------------------|----------------------------------------------------|
+| GET    | `/health`                            | Health check                                       |
+| GET    | `/api/dashboard/summary`             | Portfolio + métricas del día                       |
+| GET    | `/api/dashboard/equity-curve`        | Valor del portfolio en el tiempo                   |
+| GET    | `/api/dashboard/active-signals`      | Señales últimas 24h                                |
+| GET    | `/api/dashboard/open-positions`      | Posiciones abiertas con P&L                        |
+| GET    | `/api/signals/`                      | Lista de señales (filtros: score, status, category) |
+| GET    | `/api/signals/{id}`                  | Detalle de una señal                               |
+| GET    | `/api/trades/`                       | Historial de paper trades                          |
+| GET    | `/api/analytics/performance`         | Métricas: win rate, Sharpe, drawdown               |
+| GET    | `/api/analytics/by-category`         | P&L por categoría de mercado                       |
+| GET    | `/api/analytics/by-score`            | P&L por bracket de score                           |
+| GET    | `/api/analytics/return-distribution` | Histograma de retornos                             |  
+| GET    | `/api/activity/feed`                 | Activity feed del bot                              |
+| GET    | `/api/activity/stats`                | Stats: AI calls, tokens, costos                    |
+| GET    | `/api/activity/learning`             | Qué aprendió el bot de sus resultados              |
+| WS     | `/ws`                                | WebSocket para updates real-time al frontend       |
 
 ---
 

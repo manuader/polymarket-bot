@@ -41,3 +41,6 @@ logs/
 
 # Alembic
 backend/db/migrations/versions/__pycache__/
+
+#Claude
+.claude/
