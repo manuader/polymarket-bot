@@ -95,6 +95,10 @@ def parse_trade(raw: dict) -> dict | None:
         "taker_address": raw.get("proxyWallet", ""),
         "usd_value": price * size,
         "tx_hash": raw.get("transactionHash", ""),
+        # Metadata for activity feed (not stored in DB)
+        "_title": raw.get("title", ""),
+        "_slug": raw.get("slug", ""),
+        "_event_slug": raw.get("eventSlug", ""),
     }
 
 
@@ -124,8 +128,13 @@ async def ingest_trades(trades_data: list[dict]) -> tuple[int, list]:
             # Remove internal fields before DB insert
             ts_unix = data.pop("ts_unix", 0)
             tx_hash = data.pop("tx_hash", "")
+            title = data.pop("_title", "")
+            slug = data.pop("_slug", "")
+            event_slug = data.pop("_event_slug", "")
 
             trade = Trade(**data)
+            trade._meta_title = title  # Attach for activity logging
+            trade._meta_slug = event_slug or slug
             session.add(trade)
             new_trades.append(trade)
             inserted += 1
@@ -170,13 +179,26 @@ async def enrich_once():
         large_trades = [t for t in new_trades if t.usd_value >= settings.min_trade_usd]
 
         if large_trades:
-            await log_activity(
-                event_type="trades_ingested",
-                severity="info",
-                title=f"{inserted} new trades ({len(large_trades)} large >= ${settings.min_trade_usd:,.0f})",
-                detail=f"Largest: ${max(t.usd_value for t in large_trades):,.0f}",
-                metadata={"inserted": inserted, "large": len(large_trades)},
-            )
+            # Log each large trade individually with market info
+            for t in large_trades:
+                title = getattr(t, "_meta_title", "") or ""
+                slug = getattr(t, "_meta_slug", "") or ""
+                await log_activity(
+                    event_type="large_trade",
+                    severity="info",
+                    title=f"${t.usd_value:,.0f} {t.side} {t.outcome} — {title[:80] or t.market_id[:16]}",
+                    detail=f"Wallet: {(t.taker_address or 'unknown')[:16]}... | Price: {t.price:.3f} | Size: {t.size:.1f} | Topic: {slug}",
+                    market_id=t.market_id,
+                    metadata={
+                        "usd_value": t.usd_value,
+                        "side": t.side,
+                        "outcome": t.outcome,
+                        "price": t.price,
+                        "wallet": t.taker_address or "",
+                        "title": title,
+                        "topic": slug,
+                    },
+                )
 
         if _on_new_trades_callback:
             for trade in large_trades:

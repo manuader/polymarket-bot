@@ -399,12 +399,14 @@ async def evaluate_trade(trade: Trade) -> list[RuleHit]:
         return []
 
     hits = []
+    errors = []
     for rule_fn in ALL_RULES:
         try:
             hit = await rule_fn(trade)
             if hit:
                 hits.append(hit)
         except Exception as e:
+            errors.append(f"{rule_fn.__name__}: {str(e)[:80]}")
             log.error("rule_evaluation_error", rule=rule_fn.__name__, error=str(e))
 
     if hits:
@@ -413,6 +415,17 @@ async def evaluate_trade(trade: Trade) -> list[RuleHit]:
             market=trade.market_id[:12],
             rules=[h.rule_name for h in hits],
             max_priority=max(h.priority for h in hits),
+        )
+    else:
+        # Log that we evaluated but found nothing — helps diagnose
+        log.info(
+            "trade_evaluated_no_hits",
+            market=trade.market_id[:12],
+            usd=trade.usd_value,
+            wallet=(trade.taker_address or "")[:12],
+            outcome=trade.outcome,
+            price=trade.price,
+            errors=errors if errors else None,
         )
 
     return hits

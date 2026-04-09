@@ -230,6 +230,15 @@ async def process_trade(trade: Trade) -> Signal | None:
     # Step 1: Heuristic filter
     hits = await evaluate_trade(trade)
     if not hits:
+        # Log that we analyzed but found nothing
+        await log_activity(
+            event_type="trade_evaluated",
+            severity="info",
+            title=f"${trade.usd_value:,.0f} evaluated — no rules matched",
+            detail=f"Market: {trade.market_id[:16]} | Wallet: {(trade.taker_address or 'unknown')[:16]}... | Price: {trade.price:.3f} | {trade.outcome}",
+            market_id=trade.market_id,
+            metadata={"usd_value": trade.usd_value, "price": trade.price, "outcome": trade.outcome},
+        )
         return None
 
     await log_activity(
