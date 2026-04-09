@@ -57,7 +57,9 @@ async def lifespan(app: FastAPI):
     set_on_new_trades_callback(on_new_trade)
 
     # Start all background tasks
-    ws_manager = WebSocketManager(on_message_callback=None)
+    async def noop_callback(msg):
+        pass
+    ws_manager = WebSocketManager(on_message_callback=noop_callback)
     tasks = [
         # Data pipeline
         asyncio.create_task(run_market_sync(300), name="market-sync"),
