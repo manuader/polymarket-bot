@@ -211,11 +211,11 @@ async def rule_coordinated_wallets(trade: Trade) -> RuleHit | None:
         if len(recent_wallets) < thresholds.coordinated_min_wallets:
             return None
 
-        # Check how many are new using real API data
+        # Check how many are new using real API data (limit to 5 to avoid API spam)
         new_wallets = []
         total_volume = 0
 
-        for addr, vol, count in recent_wallets:
+        for addr, vol, count in recent_wallets[:5]:
             total_volume += float(vol)
             profile = await profile_wallet_from_api(addr)
             if not profile or profile.get("total_trades", 0) == 0:
@@ -228,6 +228,9 @@ async def rule_coordinated_wallets(trade: Trade) -> RuleHit | None:
                     fs = fs.replace(tzinfo=timezone.utc)
                 if (datetime.now(timezone.utc) - fs).days < 7:
                     new_wallets.append(addr)
+        # Add remaining volume from unchecked wallets
+        for addr, vol, count in recent_wallets[5:]:
+            total_volume += float(vol)
 
         if len(new_wallets) >= thresholds.coordinated_min_wallets and total_volume >= thresholds.coordinated_min_combined_usd:
             return RuleHit(

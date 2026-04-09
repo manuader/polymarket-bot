@@ -233,8 +233,8 @@ async def analyze_with_ai(
     prompt = build_prompt(hits, market, wallets)
 
     try:
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-        response = client.messages.create(
+        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        response = await client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
             tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],

@@ -29,7 +29,8 @@ DATA_API_URL = settings.data_api_url
 
 # In-memory cache to avoid re-fetching recently profiled wallets
 _profile_cache: dict[str, float] = {}  # address -> timestamp of last fetch
-CACHE_TTL = 3600  # re-fetch profile after 1 hour
+CACHE_TTL = 3600
+MAX_PROFILE_CACHE = 500
 
 
 async def fetch_wallet_activity(
@@ -201,6 +202,11 @@ async def profile_wallet_from_api(address: str, force: bool = False) -> dict | N
 
     # Save to DB
     await upsert_wallet(profile)
+
+    # Evict oldest cache entries if over limit
+    if len(_profile_cache) >= MAX_PROFILE_CACHE:
+        oldest = min(_profile_cache, key=_profile_cache.get)
+        del _profile_cache[oldest]
     _profile_cache[address] = now
 
     log.info(

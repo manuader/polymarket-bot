@@ -125,15 +125,16 @@ async def ingest_trades(trades_data: list[dict]) -> tuple[int, list]:
             if data["market_id"] not in known_markets:
                 continue
 
-            # Remove internal fields before DB insert
-            ts_unix = data.pop("ts_unix", 0)
-            tx_hash = data.pop("tx_hash", "")
-            title = data.pop("_title", "")
-            slug = data.pop("_slug", "")
-            event_slug = data.pop("_event_slug", "")
+            # Extract internal fields without mutating original dict
+            ts_unix = data.get("ts_unix", 0)
+            title = data.get("_title", "")
+            slug = data.get("_slug", "")
+            event_slug = data.get("_event_slug", "")
 
-            trade = Trade(**data)
-            trade._meta_title = title  # Attach for activity logging
+            # Build DB-only fields
+            db_fields = {k: v for k, v in data.items() if not k.startswith("_") and k not in ("ts_unix", "tx_hash")}
+            trade = Trade(**db_fields)
+            trade._meta_title = title
             trade._meta_slug = event_slug or slug
             session.add(trade)
             new_trades.append(trade)

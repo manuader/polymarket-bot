@@ -16,8 +16,9 @@ from config import get_settings
 log = structlog.get_logger()
 settings = get_settings()
 
-# In-memory cache: token_id -> {bids, asks, updated_at}
+# In-memory cache: token_id -> {bids, asks, updated_at} — max 200 entries
 _book_cache: dict[str, dict] = {}
+MAX_BOOK_CACHE = 200
 CACHE_TTL = 30  # seconds
 REFRESH_INTERVAL = 60  # seconds
 
@@ -138,8 +139,12 @@ async def update_cache_for_tokens(token_ids: list[str]):
         for token_id in token_ids:
             raw = await fetch_orderbook(client, token_id)
             if raw:
+                # Evict oldest entries if cache is full
+                if len(_book_cache) >= MAX_BOOK_CACHE:
+                    oldest_key = min(_book_cache, key=lambda k: _book_cache[k].get("updated_at", 0))
+                    del _book_cache[oldest_key]
                 _book_cache[token_id] = parse_book(raw)
-            await asyncio.sleep(0.1)  # Respect rate limits
+            await asyncio.sleep(0.1)
 
 
 async def run_orderbook_cache(token_ids_fn, interval_seconds: int = REFRESH_INTERVAL):

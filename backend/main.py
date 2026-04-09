@@ -10,7 +10,7 @@ from pipeline.market_sync import run_market_sync, sync_once, get_all_token_ids
 from pipeline.trade_enricher import run_trade_enricher, set_on_new_trades_callback
 from pipeline.volume_tracker import run_volume_tracker
 from pipeline.wallet_profiler import run_wallet_profiler
-from pipeline.websocket_client import WebSocketManager, parse_ws_trade
+from pipeline.websocket_client import WebSocketManager
 from pipeline.orderbook_cache import run_orderbook_cache
 from detection.signal_manager import run_detection_engine, scan_recent_trades, trade_queue
 from trading.paper_engine import run_paper_engine
@@ -33,19 +33,6 @@ structlog.configure(
     wrapper_class=structlog.BoundLogger,
 )
 log = structlog.get_logger()
-
-# Price updates queue — consumed by detection engine
-price_queue: asyncio.Queue = asyncio.Queue(maxsize=10000)
-
-
-async def on_ws_message(msg: dict):
-    """Callback for WebSocket messages — routes to price queue."""
-    parsed = await parse_ws_trade(msg)
-    if parsed and parsed.get("type") == "price_update":
-        try:
-            price_queue.put_nowait(parsed)
-        except asyncio.QueueFull:
-            pass
 
 
 @asynccontextmanager
@@ -70,11 +57,11 @@ async def lifespan(app: FastAPI):
     set_on_new_trades_callback(on_new_trade)
 
     # Start all background tasks
-    ws_manager = WebSocketManager(on_message_callback=on_ws_message)
+    ws_manager = WebSocketManager(on_message_callback=None)
     tasks = [
         # Data pipeline
         asyncio.create_task(run_market_sync(300), name="market-sync"),
-        asyncio.create_task(run_trade_enricher(15), name="trade-enricher"),  # poll every 15s
+        asyncio.create_task(run_trade_enricher(15), name="trade-enricher"),
         asyncio.create_task(run_volume_tracker(60), name="volume-tracker"),
         asyncio.create_task(run_wallet_profiler(120), name="wallet-profiler"),
         asyncio.create_task(run_orderbook_cache(get_all_token_ids, 60), name="orderbook-cache"),
@@ -82,7 +69,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(run_detection_engine(), name="detection-engine"),
         # Paper trading engine
         asyncio.create_task(run_paper_engine(), name="paper-engine"),
-        # Cleanup old trades & track outcomes for learning
+        # Cleanup & learning
         asyncio.create_task(run_cleanup(), name="trade-cleanup"),
         asyncio.create_task(run_outcome_tracker(), name="outcome-tracker"),
     ]
@@ -100,7 +87,6 @@ async def lifespan(app: FastAPI):
         log.error("initial_scan_failed", error=str(e))
 
     app.state.ws_manager = ws_manager
-    app.state.price_queue = price_queue
     app.state.bg_tasks = tasks
 
     yield
@@ -121,11 +107,16 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "*"],
-    allow_credentials=True,
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Health check — MUST be before SPA catch-all
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 
 # Register API routes
 app.include_router(dashboard_router)
@@ -141,8 +132,7 @@ async def ws(websocket: WebSocket):
     await websocket_endpoint(websocket)
 
 
-# Serve static frontend files (production build)
-import os
+# Serve static frontend files (production build) — LAST
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -158,8 +148,3 @@ if static_dir.exists():
         if file_path.exists() and file_path.is_file():
             return FileResponse(file_path)
         return FileResponse(static_dir / "index.html")
-
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}

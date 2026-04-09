@@ -279,6 +279,12 @@ async def process_trade(trade: Trade) -> Signal | None:
 
     # Step 4: Create signal
     signal = await create_signal(hits, ai_result, market)
+
+    # Step 5: Open paper trade if score is high enough
+    if signal and signal.score >= settings.min_score_to_trade:
+        from trading.paper_engine import process_signal
+        await process_signal(signal)
+
     return signal
 
 
