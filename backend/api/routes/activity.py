@@ -92,3 +92,39 @@ async def learning_summary():
     """What the bot has learned from past signal outcomes."""
     from trading.outcome_tracker import get_learning_summary
     return await get_learning_summary()
+
+
+@router.get("/recent-trades")
+async def recent_trades(
+    limit: int = Query(50, le=200),
+    session: AsyncSession = Depends(get_session),
+):
+    """Recent trades from DB (all are >= MIN_TRADE_USD) with market info."""
+    from db.models import Trade, Market
+    from sqlalchemy import select
+
+    result = await session.execute(
+        select(Trade, Market.question, Market.category, Market.slug)
+        .outerjoin(Market, Trade.market_id == Market.condition_id)
+        .order_by(Trade.timestamp.desc())
+        .limit(limit)
+    )
+    rows = result.all()
+
+    return [
+        {
+            "id": t.id,
+            "timestamp": t.timestamp.isoformat() if t.timestamp else None,
+            "market_id": t.market_id,
+            "question": question or "",
+            "category": category or "",
+            "slug": slug or "",
+            "side": t.side,
+            "outcome": t.outcome,
+            "price": t.price,
+            "size": t.size,
+            "usd_value": round(t.usd_value, 2),
+            "wallet": t.taker_address or t.maker_address or "",
+        }
+        for t, question, category, slug in rows
+    ]

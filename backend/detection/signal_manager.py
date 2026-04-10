@@ -228,26 +228,36 @@ async def create_signal(
 async def process_trade(trade: Trade) -> Signal | None:
     """Full detection pipeline for a single trade."""
     # Step 1: Heuristic filter
-    hits = await evaluate_trade(trade)
+    hits, rule_results = await evaluate_trade(trade)
     if not hits:
-        # Log that we analyzed but found nothing
         await log_activity(
             event_type="trade_evaluated",
             severity="info",
             title=f"${trade.usd_value:,.0f} evaluated — no rules matched",
             detail=f"Market: {trade.market_id[:16]} | Wallet: {(trade.taker_address or 'unknown')[:16]}... | Price: {trade.price:.3f} | {trade.outcome}",
             market_id=trade.market_id,
-            metadata={"usd_value": trade.usd_value, "price": trade.price, "outcome": trade.outcome},
+            metadata={
+                "usd_value": trade.usd_value,
+                "price": trade.price,
+                "outcome": trade.outcome,
+                "side": trade.side,
+                "wallet": trade.taker_address or "",
+                "rule_results": rule_results,
+            },
         )
         return None
 
     await log_activity(
         event_type="trade_flagged",
-        severity="info",
+        severity="warning",
         title=f"Trade ${trade.usd_value:,.0f} flagged by {len(hits)} rule(s)",
         detail=f"Market: {trade.market_id[:16]}. Rules: {', '.join(h.rule_name for h in hits)}. Wallet: {(trade.taker_address or 'unknown')[:12]}...",
         market_id=trade.market_id,
-        metadata={"usd_value": trade.usd_value, "rules": [h.rule_name for h in hits]},
+        metadata={
+            "usd_value": trade.usd_value,
+            "rules": [h.rule_name for h in hits],
+            "rule_results": rule_results,
+        },
     )
 
     # Step 2: Load market and wallet data for AI analysis

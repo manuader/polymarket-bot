@@ -28,7 +28,7 @@ class RuleThresholds:
     pre_announcement_priority: int = 8
 
     # Rule 4: IMPROBABLE_BET
-    improbable_bet_max_price: float = 0.20  # was 0.15
+    improbable_bet_max_price: float = 0.22
     improbable_bet_min_usd: float = _base
     improbable_bet_priority: int = 7
 
@@ -51,7 +51,7 @@ class RuleThresholds:
     price_reversal_priority: int = 7
 
     # Rule 8: BET_AGAINST_CONSENSUS
-    consensus_threshold: float = 0.75  # was 0.80
+    consensus_threshold: float = 0.72
     consensus_min_usd: float = _base
     consensus_priority: int = 7
 

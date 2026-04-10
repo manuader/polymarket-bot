@@ -108,8 +108,19 @@ async def ingest_trades(trades_data: list[dict]) -> tuple[int, list]:
     if not trades_data:
         return 0, []
 
-    # Filter to only trades newer than what we've seen
-    new_candidates = [t for t in trades_data if t["ts_unix"] > _last_seen_timestamp]
+    # Filter: newer than last seen AND >= MIN_TRADE_USD (don't waste DB space on small trades)
+    min_usd = settings.min_trade_usd
+    new_candidates = [
+        t for t in trades_data
+        if t["ts_unix"] > _last_seen_timestamp and t["usd_value"] >= min_usd
+    ]
+
+    # Still track max timestamp from ALL trades (even small ones) to avoid re-processing
+    for t in trades_data:
+        ts = t.get("ts_unix", 0)
+        if ts > _last_seen_timestamp:
+            _last_seen_timestamp = ts
+
     if not new_candidates:
         return 0, []
 
@@ -117,7 +128,6 @@ async def ingest_trades(trades_data: list[dict]) -> tuple[int, list]:
     new_trades = []
 
     async with async_session() as session:
-        # Cache known markets
         market_result = await session.execute(select(Market.condition_id))
         known_markets = {row[0] for row in market_result}
 
@@ -125,13 +135,11 @@ async def ingest_trades(trades_data: list[dict]) -> tuple[int, list]:
             if data["market_id"] not in known_markets:
                 continue
 
-            # Extract internal fields without mutating original dict
             ts_unix = data.get("ts_unix", 0)
             title = data.get("_title", "")
             slug = data.get("_slug", "")
             event_slug = data.get("_event_slug", "")
 
-            # Build DB-only fields
             db_fields = {k: v for k, v in data.items() if not k.startswith("_") and k not in ("ts_unix", "tx_hash")}
             trade = Trade(**db_fields)
             trade._meta_title = title
@@ -139,10 +147,6 @@ async def ingest_trades(trades_data: list[dict]) -> tuple[int, list]:
             session.add(trade)
             new_trades.append(trade)
             inserted += 1
-
-            # Track max timestamp
-            if ts_unix > _last_seen_timestamp:
-                _last_seen_timestamp = ts_unix
 
         if inserted > 0:
             await session.commit()
@@ -175,34 +179,31 @@ async def enrich_once():
     if inserted > 0:
         log.info("trades_ingested", new=inserted, total_fetched=len(raw_trades))
 
-        # Log and feed to detection
+        # All stored trades are >= MIN_TRADE_USD → log and send ALL to detection
         from activity import log_activity
-        large_trades = [t for t in new_trades if t.usd_value >= settings.min_trade_usd]
+        for t in new_trades:
+            title = getattr(t, "_meta_title", "") or ""
+            slug = getattr(t, "_meta_slug", "") or ""
+            await log_activity(
+                event_type="large_trade",
+                severity="info",
+                title=f"${t.usd_value:,.0f} {t.side} {t.outcome} — {title[:80] or t.market_id[:16]}",
+                detail=f"Wallet: {(t.taker_address or 'unknown')[:16]}... | Price: {t.price:.3f} | Size: {t.size:.1f} | Topic: {slug}",
+                market_id=t.market_id,
+                metadata={
+                    "usd_value": t.usd_value,
+                    "side": t.side,
+                    "outcome": t.outcome,
+                    "price": t.price,
+                    "wallet": t.taker_address or "",
+                    "title": title,
+                    "topic": slug,
+                },
+            )
 
-        if large_trades:
-            # Log each large trade individually with market info
-            for t in large_trades:
-                title = getattr(t, "_meta_title", "") or ""
-                slug = getattr(t, "_meta_slug", "") or ""
-                await log_activity(
-                    event_type="large_trade",
-                    severity="info",
-                    title=f"${t.usd_value:,.0f} {t.side} {t.outcome} — {title[:80] or t.market_id[:16]}",
-                    detail=f"Wallet: {(t.taker_address or 'unknown')[:16]}... | Price: {t.price:.3f} | Size: {t.size:.1f} | Topic: {slug}",
-                    market_id=t.market_id,
-                    metadata={
-                        "usd_value": t.usd_value,
-                        "side": t.side,
-                        "outcome": t.outcome,
-                        "price": t.price,
-                        "wallet": t.taker_address or "",
-                        "title": title,
-                        "topic": slug,
-                    },
-                )
-
+        # Send ALL to detection engine
         if _on_new_trades_callback:
-            for trade in large_trades:
+            for trade in new_trades:
                 await _on_new_trades_callback(trade)
 
     return inserted

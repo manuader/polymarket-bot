@@ -396,20 +396,26 @@ ALL_RULES = [
 ]
 
 
-async def evaluate_trade(trade: Trade) -> list[RuleHit]:
-    """Run all heuristic rules against a single trade. Returns list of hits."""
+async def evaluate_trade(trade: Trade) -> tuple[list[RuleHit], dict[str, str]]:
+    """Run all heuristic rules against a single trade.
+    Returns (list of hits, dict of rule_name -> reason for non-match)."""
     if trade.usd_value < thresholds.min_trade_usd:
-        return []
+        return [], {"ALL": f"usd_value {trade.usd_value:.0f} < {thresholds.min_trade_usd}"}
 
     hits = []
-    errors = []
+    rule_results = {}
+
     for rule_fn in ALL_RULES:
+        rule_name = rule_fn.__name__.replace("rule_", "").upper()
         try:
             hit = await rule_fn(trade)
             if hit:
                 hits.append(hit)
+                rule_results[rule_name] = "MATCHED"
+            else:
+                rule_results[rule_name] = "no match"
         except Exception as e:
-            errors.append(f"{rule_fn.__name__}: {str(e)[:80]}")
+            rule_results[rule_name] = f"error: {str(e)[:60]}"
             log.error("rule_evaluation_error", rule=rule_fn.__name__, error=str(e))
 
     if hits:
@@ -419,16 +425,5 @@ async def evaluate_trade(trade: Trade) -> list[RuleHit]:
             rules=[h.rule_name for h in hits],
             max_priority=max(h.priority for h in hits),
         )
-    else:
-        # Log that we evaluated but found nothing — helps diagnose
-        log.info(
-            "trade_evaluated_no_hits",
-            market=trade.market_id[:12],
-            usd=trade.usd_value,
-            wallet=(trade.taker_address or "")[:12],
-            outcome=trade.outcome,
-            price=trade.price,
-            errors=errors if errors else None,
-        )
 
-    return hits
+    return hits, rule_results

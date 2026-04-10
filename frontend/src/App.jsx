@@ -1,11 +1,13 @@
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import Dashboard from "./pages/Dashboard";
+import Monitor from "./pages/Monitor";
 import Signals from "./pages/Signals";
 import Trades from "./pages/Trades";
 import Analytics from "./pages/Analytics";
 
 const navItems = [
   { to: "/", label: "Dashboard" },
+  { to: "/monitor", label: "Monitor" },
   { to: "/signals", label: "Signals" },
   { to: "/trades", label: "Trades" },
   { to: "/analytics", label: "Analytics" },
@@ -46,6 +48,7 @@ export default function App() {
         <main className="max-w-7xl mx-auto px-4 py-6">
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/monitor" element={<Monitor />} />
             <Route path="/signals" element={<Signals />} />
             <Route path="/trades" element={<Trades />} />
             <Route path="/analytics" element={<Analytics />} />

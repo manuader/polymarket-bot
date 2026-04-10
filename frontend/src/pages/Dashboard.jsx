@@ -25,14 +25,17 @@ export default function Dashboard() {
         fetch(`${API}/equity-curve`),
         fetch(`${API}/active-signals`),
         fetch(`${API}/open-positions`),
-        fetch("/api/activity/feed?limit=30"),
+        fetch("/api/activity/feed?limit=50"),
         fetch("/api/activity/stats"),
       ]);
       setSummary(await sumRes.json());
       setEquity(await eqRes.json());
       setSignals(await sigRes.json());
       setPositions(await posRes.json());
-      setActivity(await actRes.json());
+      const allActivity = await actRes.json();
+      // Dashboard only shows important events — detailed trades/evaluations are in Monitor
+      const importantTypes = ["signal_detected", "signal_resolved", "ai_analysis", "trade_flagged", "position_opened", "position_closed"];
+      setActivity(allActivity.filter((e) => importantTypes.includes(e.event_type)));
       setBotStats(await statsRes.json());
     } catch (err) {
       console.error("Failed to fetch dashboard:", err);
