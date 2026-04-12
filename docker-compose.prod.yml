@@ -23,9 +23,7 @@ services:
         -c effective_cache_size=256MB
 
   backend:
-    build:
-      context: .
-      dockerfile: Dockerfile.prod
+    image: manuader/polymarket-bot:latest
     restart: always
     env_file: .env
     environment:
