@@ -1,8 +1,7 @@
 """
 Filter 2: AI analysis using Claude Sonnet with web search.
-Only invoked for trades that passed the heuristic filter (~5% of total).
-Produces insider_score (1-10), confidence (0-1), and recommendation.
-Results are cached per market for 6 hours.
+Only invoked for trades that passed the heuristic filter.
+Produces an investigation report explaining the AI's research and reasoning.
 """
 
 import json
@@ -16,20 +15,19 @@ from config import get_settings
 from db.database import async_session
 from db.models import AICache, Market, Wallet, Signal
 from detection.heuristic_filter import RuleHit
+from activity import record_ai_usage, log_activity
 
 log = structlog.get_logger()
 settings = get_settings()
 
 MODEL = "claude-sonnet-4-20250514"
-MAX_TOKENS = 1500
+MAX_TOKENS = 2500
 CACHE_TTL_HOURS = 6
 
-# Track daily invocations
 _daily_calls = {"date": "", "count": 0}
 
 
 def _check_daily_limit() -> bool:
-    """Check if we're within the daily AI call limit."""
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if _daily_calls["date"] != today:
         _daily_calls["date"] = today
@@ -46,15 +44,11 @@ def _increment_daily_count():
 
 
 async def get_cached_analysis(market_id: str) -> dict | None:
-    """Check for a cached AI analysis for this market."""
     async with async_session() as session:
         now = datetime.now(timezone.utc)
         result = await session.execute(
             select(AICache.response_json).where(
-                and_(
-                    AICache.market_id == market_id,
-                    AICache.expires_at > now,
-                )
+                and_(AICache.market_id == market_id, AICache.expires_at > now)
             ).order_by(AICache.created_at.desc()).limit(1)
         )
         row = result.scalar_one_or_none()
@@ -67,7 +61,6 @@ async def get_cached_analysis(market_id: str) -> dict | None:
 
 
 async def save_cache(market_id: str, response: dict):
-    """Cache an AI analysis result."""
     async with async_session() as session:
         cache_entry = AICache(
             market_id=market_id,
@@ -79,8 +72,6 @@ async def save_cache(market_id: str, response: dict):
 
 
 def build_prompt(hits: list[RuleHit], market: Market, wallets: list[Wallet]) -> str:
-    """Build the analysis prompt from rule hits and market context."""
-    # Aggregate info from all hits
     all_wallets = []
     total_volume = 0
     rule_names = []
@@ -88,10 +79,8 @@ def build_prompt(hits: list[RuleHit], market: Market, wallets: list[Wallet]) -> 
         all_wallets.extend(hit.trigger_wallets)
         total_volume += hit.total_suspicious_volume
         rule_names.append(hit.rule_name)
-
     all_wallets = list(set(w for w in all_wallets if w))
 
-    # Build wallet profiles section
     wallet_info = []
     for w in wallets:
         if w:
@@ -102,12 +91,10 @@ def build_prompt(hits: list[RuleHit], market: Market, wallets: list[Wallet]) -> 
             wallet_info.append(
                 f"  - {w.address[:10]}...: age={age}, trades={w.total_trades}, "
                 f"volume=${w.total_volume:,.0f}, win_rate={w.win_rate or 'N/A'}, "
-                f"markets={w.markets_traded}, flagged_hashdive={w.is_flagged_hashdive}"
+                f"markets={w.markets_traded}"
             )
-
     wallet_section = "\n".join(wallet_info) if wallet_info else "  No wallet profiles available"
 
-    # Time to resolution
     time_to_res = "unknown"
     if market.end_date:
         end = market.end_date
@@ -116,29 +103,19 @@ def build_prompt(hits: list[RuleHit], market: Market, wallets: list[Wallet]) -> 
         delta = end - datetime.now(timezone.utc)
         if delta.total_seconds() > 0:
             hours = delta.total_seconds() / 3600
-            if hours < 24:
-                time_to_res = f"{hours:.1f} hours"
-            else:
-                time_to_res = f"{hours/24:.1f} days"
+            time_to_res = f"{hours:.1f} hours" if hours < 24 else f"{hours/24:.1f} days"
         else:
             time_to_res = "EXPIRED"
 
     direction = hits[0].direction if hits else "unknown"
-    entry_price = 0
-    if market.outcome_prices:
-        if direction == "YES" and len(market.outcome_prices) > 0:
-            entry_price = market.outcome_prices[0]
-        elif direction == "NO" and len(market.outcome_prices) > 1:
-            entry_price = market.outcome_prices[1]
 
-    # Collect metadata from all hits
     metadata_parts = []
     for hit in hits:
         if hit.metadata:
             metadata_parts.append(f"  {hit.rule_name}: {json.dumps(hit.metadata)}")
     metadata_section = "\n".join(metadata_parts) if metadata_parts else "  None"
 
-    return f"""You are an analyst specialized in detecting insider trading on Polymarket prediction markets.
+    return f"""You are an investigator specialized in detecting insider trading on Polymarket prediction markets.
 
 ## Signal Detected
 - Rules triggered: {', '.join(rule_names)}
@@ -150,7 +127,7 @@ def build_prompt(hits: list[RuleHit], market: Market, wallets: list[Wallet]) -> 
 ## Suspicious Trade Data
 - Wallet(s): {', '.join(w[:10] + '...' for w in all_wallets) if all_wallets else 'unknown'}
 - Total suspicious volume: ${total_volume:,.0f}
-- Direction: {direction} (YES/NO)
+- Direction: {direction}
 - Current market price: YES={market.outcome_prices[0] if market.outcome_prices else 'N/A'}, NO={market.outcome_prices[1] if market.outcome_prices and len(market.outcome_prices) > 1 else 'N/A'}
 
 ## Wallet Profiles
@@ -161,37 +138,48 @@ def build_prompt(hits: list[RuleHit], market: Market, wallets: list[Wallet]) -> 
 
 ## Your Task
 
-1. Search the web for information about this market's event:
-   - Is there an upcoming announcement or scheduled decision?
-   - Are there recent news that would justify this price movement?
+You must conduct a thorough investigation to determine whether this trade is likely insider trading. Follow these steps:
+
+1. **Search the web** for recent news and information about this market's event:
+   - Is there an upcoming announcement, decision, or scheduled event?
+   - Have there been any leaks, rumors, or insider information reported?
+   - Are there recent news articles that would explain this trade?
    - Who would have privileged information about this outcome?
 
-2. Assess the probability of insider trading considering:
-   - Timing of the trade vs announcement/resolution date
-   - Wallet profile (new, no history, concentrated in one market)
-   - Bet size vs market probability
-   - Whether public information justifies the bet
-   - Known insider trading patterns on Polymarket
+2. **Analyze the trade pattern** in context:
+   - Does the wallet behavior match known insider trading patterns (new account, large concentrated bet, timing)?
+   - Is the bet size unusual relative to the market's liquidity?
+   - Does public information justify this trade, or does it suggest non-public knowledge?
+   - Is this just a normal whale/sophisticated trader making a rational bet?
 
-3. Respond EXCLUSIVELY in the following JSON format (no markdown, no backticks):
+3. **Write an investigation report** and respond in this exact JSON format (no markdown, no backticks):
 
 {{
   "insider_score": <1-10>,
   "confidence": <0.0-1.0>,
   "likely_direction": "YES" | "NO",
-  "reasoning": "<2-3 sentence explanation>",
-  "key_findings": ["<finding 1>", "<finding 2>"],
+  "investigation_report": "<DETAILED multi-paragraph report. Explain: (1) What you searched for and what you found. (2) Whether news/events justify the trade. (3) Analysis of the wallet behavior. (4) Your conclusion on whether this is insider trading and why.>",
+  "reasoning": "<1-2 sentence summary of your conclusion>",
+  "key_findings": ["<finding 1>", "<finding 2>", "<finding 3>"],
   "upcoming_event": "<description of relevant event if found>" | null,
   "upcoming_event_date": "<date if found>" | null,
   "news_justification": true | false,
   "recommendation": "STRONG_BUY" | "BUY" | "HOLD" | "SKIP"
 }}
 
-Scoring criteria:
-- 1-3: Normal whale/sophisticated trader activity
-- 4-5: Suspicious but insufficient evidence
-- 6-7: Highly suspicious, multiple indicators align
-- 8-10: Near-certain insider trading (new account + large amount + pre-announcement timing + no justifying news)"""
+IMPORTANT scoring criteria:
+- 1-3: Normal whale/sophisticated trader. Public info justifies the trade. NOT insider trading.
+- 4-5: Somewhat suspicious but insufficient evidence. Could be a smart trader.
+- 6-7: Highly suspicious. Multiple indicators align. Likely insider trading.
+- 8-10: Near-certain insider trading. New account + large amount + pre-announcement timing + NO justifying public news.
+
+IMPORTANT recommendation criteria:
+- STRONG_BUY: Score 8-10. Very high confidence this is insider trading. Worth following.
+- BUY: Score 6-7. Likely insider trading. Moderate confidence.
+- HOLD: Score 4-5. Suspicious but not enough to trade on.
+- SKIP: Score 1-3. Not insider trading. Normal market activity.
+
+Be skeptical. Most large trades are NOT insider trading. Only recommend BUY/STRONG_BUY when you have strong evidence."""
 
 
 async def analyze_with_ai(
@@ -199,27 +187,22 @@ async def analyze_with_ai(
     market: Market,
     wallets: list[Wallet],
 ) -> dict | None:
-    """
-    Run AI analysis on a set of rule hits.
-    Returns parsed JSON response or None if unavailable.
-    """
-    if not settings.anthropic_api_key or settings.anthropic_api_key.startswith("sk-ant-..."):
-        log.warning("ai_analyzer_no_api_key")
-        # Return a synthetic score based on heuristic priority
-        max_priority = max(h.priority for h in hits) if hits else 5
-        return {
-            "insider_score": max_priority,
-            "confidence": 0.5,
-            "likely_direction": hits[0].direction if hits else "YES",
-            "reasoning": f"AI analysis unavailable. Heuristic score based on {len(hits)} rule(s): {', '.join(h.rule_name for h in hits)}",
-            "key_findings": [h.rule_name for h in hits],
-            "upcoming_event": None,
-            "upcoming_event_date": None,
-            "news_justification": False,
-            "recommendation": "BUY" if max_priority >= 7 else "HOLD",
-        }
+    """Run AI analysis. Returns parsed response or None (with error logged to activity feed)."""
+    key = settings.anthropic_api_key or ""
 
-    # Check cache first
+    # Check API key is valid (real keys are 90+ chars)
+    if len(key) < 50:
+        log.warning("ai_analyzer_no_api_key", key_length=len(key))
+        await log_activity(
+            event_type="ai_error",
+            severity="error",
+            title="AI analysis failed: API key not configured",
+            detail=f"The ANTHROPIC_API_KEY in .env is missing or invalid (length: {len(key)}). AI cannot analyze trades.",
+            market_id=market.condition_id,
+        )
+        return None
+
+    # Check cache
     cached = await get_cached_analysis(market.condition_id)
     if cached:
         log.info("ai_cache_hit", market=market.condition_id[:12])
@@ -228,12 +211,19 @@ async def analyze_with_ai(
     # Check daily limit
     if not _check_daily_limit():
         log.warning("ai_daily_limit_reached", count=_daily_calls["count"])
+        await log_activity(
+            event_type="ai_error",
+            severity="warning",
+            title=f"AI analysis skipped: daily limit reached ({_daily_calls['count']}/{settings.max_ai_calls_per_day})",
+            detail=f"Market: {market.question[:60] if market.question else market.condition_id[:12]}",
+            market_id=market.condition_id,
+        )
         return None
 
     prompt = build_prompt(hits, market, wallets)
 
     try:
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        client = anthropic.AsyncAnthropic(api_key=key)
         response = await client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
@@ -243,35 +233,17 @@ async def analyze_with_ai(
 
         _increment_daily_count()
 
-        # Track token usage
-        from activity import record_ai_usage, log_activity
         input_tokens = getattr(response.usage, "input_tokens", 0)
         output_tokens = getattr(response.usage, "output_tokens", 0)
         record_ai_usage(input_tokens, output_tokens)
 
-        await log_activity(
-            event_type="ai_analysis",
-            severity="info",
-            title=f"AI analyzed: {market.question[:60] if market.question else market.condition_id[:12]}",
-            detail=f"Model: {MODEL}. Input tokens: {input_tokens}. Output tokens: {output_tokens}.",
-            market_id=market.condition_id,
-            metadata={
-                "model": MODEL,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "daily_calls": _daily_calls["count"],
-            },
-        )
-
-        # Extract text from response
+        # Extract text
         text = ""
         for block in response.content:
             if hasattr(block, "text"):
                 text += block.text
 
-        # Parse JSON response
         text = text.strip()
-        # Remove markdown code fences if present
         if text.startswith("```"):
             text = text.split("\n", 1)[-1]
         if text.endswith("```"):
@@ -280,19 +252,43 @@ async def analyze_with_ai(
 
         result = json.loads(text)
 
-        # Validate required fields
+        # Validate
         required = ["insider_score", "confidence", "likely_direction", "reasoning", "recommendation"]
         for field in required:
             if field not in result:
                 log.error("ai_response_missing_field", field=field)
                 return None
 
-        # Clamp values
         result["insider_score"] = max(1, min(10, int(result["insider_score"])))
         result["confidence"] = max(0.0, min(1.0, float(result["confidence"])))
 
-        # Cache the result
+        # Cache
         await save_cache(market.condition_id, result)
+
+        # Log the investigation report to activity feed
+        report = result.get("investigation_report", result.get("reasoning", ""))
+        cost = (input_tokens * 3 + output_tokens * 15) / 1_000_000
+
+        await log_activity(
+            event_type="ai_analysis",
+            severity="alert" if result["insider_score"] >= 7 else "info",
+            title=f"AI investigation: {market.question[:60] if market.question else ''} — Score {result['insider_score']}/10",
+            detail=report,
+            market_id=market.condition_id,
+            metadata={
+                "model": MODEL,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cost_usd": round(cost, 4),
+                "daily_calls": _daily_calls["count"],
+                "insider_score": result["insider_score"],
+                "confidence": result["confidence"],
+                "recommendation": result["recommendation"],
+                "key_findings": result.get("key_findings", []),
+                "news_justification": result.get("news_justification"),
+                "upcoming_event": result.get("upcoming_event"),
+            },
+        )
 
         log.info(
             "ai_analysis_complete",
@@ -300,16 +296,32 @@ async def analyze_with_ai(
             score=result["insider_score"],
             confidence=result["confidence"],
             recommendation=result["recommendation"],
+            cost=f"${cost:.4f}",
         )
 
         return result
 
     except json.JSONDecodeError as e:
-        log.error("ai_response_parse_error", error=str(e), raw=text[:200] if text else "")
+        log.error("ai_response_parse_error", error=str(e))
+        await log_activity(
+            event_type="ai_error", severity="error",
+            title=f"AI response parse error: {str(e)[:60]}",
+            market_id=market.condition_id,
+        )
         return None
     except anthropic.APIError as e:
         log.error("ai_api_error", error=str(e))
+        await log_activity(
+            event_type="ai_error", severity="error",
+            title=f"AI API error: {str(e)[:80]}",
+            market_id=market.condition_id,
+        )
         return None
     except Exception as e:
         log.error("ai_unexpected_error", error=str(e))
+        await log_activity(
+            event_type="ai_error", severity="error",
+            title=f"AI error: {str(e)[:80]}",
+            market_id=market.condition_id,
+        )
         return None

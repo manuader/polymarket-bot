@@ -31,7 +31,7 @@ export default function Monitor() {
       const allEvents = await pipRes.json();
       setPipeline(
         allEvents.filter((e) =>
-          ["large_trade", "trade_evaluated", "trade_flagged", "ai_analysis", "signal_detected"].includes(e.event_type)
+          ["large_trade", "trade_evaluated", "trade_flagged", "ai_analysis", "ai_error", "trade_skipped", "signal_detected"].includes(e.event_type)
         )
       );
     } catch (err) {
@@ -121,6 +121,8 @@ function PipelineCard({ event }) {
     trade_evaluated: "border-l-gray-600",
     trade_flagged: "border-l-yellow-500",
     ai_analysis: "border-l-purple-500",
+    ai_error: "border-l-red-700",
+    trade_skipped: "border-l-orange-500",
     signal_detected: "border-l-red-500",
   }[e.event_type] || "border-l-gray-600";
 
@@ -129,6 +131,8 @@ function PipelineCard({ event }) {
     trade_evaluated: "bg-gray-800/30",
     trade_flagged: "bg-yellow-500/5",
     ai_analysis: "bg-purple-500/5",
+    ai_error: "bg-red-700/10",
+    trade_skipped: "bg-orange-500/5",
     signal_detected: "bg-red-500/5",
   }[e.event_type] || "bg-gray-800/30";
 
@@ -137,6 +141,8 @@ function PipelineCard({ event }) {
     trade_evaluated: "🔎",
     trade_flagged: "🚨",
     ai_analysis: "🤖",
+    ai_error: "❌",
+    trade_skipped: "⏭️",
     signal_detected: "📊",
   }[e.event_type] || "📋";
 
@@ -185,10 +191,45 @@ function PipelineCard({ event }) {
             </div>
           )}
 
-          {/* Expanded: AI reasoning */}
-          {expanded && e.event_type === "ai_analysis" && e.detail && (
-            <div className="mt-2 bg-gray-900/50 rounded p-2 text-xs text-gray-300">
-              <div className="text-gray-500 uppercase text-[10px] mb-1 font-medium">AI Reasoning</div>
+          {/* Expanded: AI investigation report */}
+          {expanded && e.event_type === "ai_analysis" && (
+            <div className="mt-2 bg-purple-900/20 border border-purple-500/20 rounded p-3 text-xs space-y-2">
+              <div className="text-purple-400 uppercase text-[10px] font-bold">AI Investigation Report</div>
+              {m.insider_score != null && (
+                <div className="flex gap-4 text-sm">
+                  <span>Insider Score: <span className={`font-bold ${m.insider_score >= 7 ? "text-red-400" : m.insider_score >= 5 ? "text-yellow-400" : "text-emerald-400"}`}>{m.insider_score}/10</span></span>
+                  <span>Confidence: <span className="font-bold text-gray-200">{(m.confidence * 100).toFixed(0)}%</span></span>
+                  {m.cost_usd != null && <span className="text-gray-500">Cost: ${m.cost_usd}</span>}
+                  {m.input_tokens && <span className="text-gray-500">Tokens: {m.input_tokens + (m.output_tokens || 0)}</span>}
+                </div>
+              )}
+              {m.key_findings && m.key_findings.length > 0 && (
+                <div>
+                  <div className="text-gray-500 text-[10px] uppercase mb-0.5">Key Findings</div>
+                  <ul className="list-disc list-inside text-gray-300 space-y-0.5">
+                    {m.key_findings.map((f, i) => <li key={i}>{f}</li>)}
+                  </ul>
+                </div>
+              )}
+              {m.upcoming_event && (
+                <div className="text-yellow-400">Upcoming event: {m.upcoming_event}</div>
+              )}
+              {m.news_justification != null && (
+                <div className={m.news_justification ? "text-emerald-400" : "text-red-400"}>
+                  News justification: {m.news_justification ? "Yes — public info explains this trade" : "No — no public justification found"}
+                </div>
+              )}
+              {e.detail && (
+                <div className="text-gray-300 whitespace-pre-wrap leading-relaxed border-t border-gray-700 pt-2 mt-2">
+                  {e.detail}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* AI error */}
+          {expanded && e.event_type === "ai_error" && (
+            <div className="mt-2 bg-red-900/20 border border-red-500/20 rounded p-2 text-xs text-red-300">
               {e.detail}
             </div>
           )}

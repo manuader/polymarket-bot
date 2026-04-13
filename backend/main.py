@@ -37,7 +37,15 @@ log = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("starting_polymarket_bot", min_score=settings.min_score_to_trade)
+    key = settings.anthropic_api_key or ""
+    ai_ok = len(key) > 50
+    log.info(
+        "starting_polymarket_bot",
+        min_score=settings.min_score_to_trade,
+        min_trade_usd=settings.min_trade_usd,
+        ai_configured=ai_ok,
+        key_prefix=key[:12] + "..." if ai_ok else "MISSING/INVALID",
+    )
 
     # Initial market sync (with timeout so it doesn't block startup)
     try:

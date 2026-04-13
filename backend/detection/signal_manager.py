@@ -81,16 +81,10 @@ def compute_composite_score(
     # Clamp
     final_score = max(1, min(10, base_score))
 
-    # Derive recommendation from score if AI didn't provide one
+    # Without AI, never recommend buying — needs AI confirmation
     if not ai_result:
-        if final_score >= 8:
-            recommendation = "STRONG_BUY"
-        elif final_score >= 6:
-            recommendation = "BUY"
-        elif final_score >= 4:
-            recommendation = "HOLD"
-        else:
-            recommendation = "SKIP"
+        confidence = 0.3
+        recommendation = "HOLD"
 
     return final_score, confidence, recommendation
 
@@ -291,9 +285,19 @@ async def process_trade(trade: Trade) -> Signal | None:
     signal = await create_signal(hits, ai_result, market)
 
     # Step 5: Open paper trade if score is high enough
-    if signal and signal.score >= settings.min_score_to_trade:
+    # Only open paper trade if AI confirmed (ai_result is not None)
+    if signal and signal.score >= settings.min_score_to_trade and ai_result is not None:
         from trading.paper_engine import process_signal
         await process_signal(signal)
+    elif signal and ai_result is None:
+        await log_activity(
+            event_type="trade_skipped",
+            severity="warning",
+            title=f"Paper trade skipped — AI analysis unavailable",
+            detail=f"Signal score {signal.score} for {market.question[:60] if market.question else signal.market_id[:16]}. AI must confirm before trading.",
+            market_id=signal.market_id,
+            signal_id=signal.id,
+        )
 
     return signal
 
