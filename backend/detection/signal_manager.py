@@ -221,6 +221,20 @@ async def create_signal(
 
 async def process_trade(trade: Trade) -> Signal | None:
     """Full detection pipeline for a single trade."""
+    # Skip if there's already a recent signal for this market (avoid duplicate evaluations)
+    async with async_session() as session:
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+        existing = await session.execute(
+            select(func.count(Signal.id)).where(
+                and_(
+                    Signal.market_id == trade.market_id,
+                    Signal.detected_at >= cutoff,
+                )
+            )
+        )
+        if existing.scalar_one() > 0:
+            return None
+
     # Step 1: Heuristic filter
     hits, rule_results = await evaluate_trade(trade)
     if not hits:
