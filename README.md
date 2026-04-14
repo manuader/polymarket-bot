@@ -38,15 +38,22 @@ Cada trade evaluado muestra qué reglas matchearon y cuáles no (con la razón),
 
 **Filtro 2 — Claude Sonnet + Web Search** (solo si alguna regla matchea con prioridad >= 6):
 
-- Recibe: reglas activadas, mercado, perfil real del wallet, contexto de volumen.
-- Busca en la web: noticias recientes, anuncios programados, quién tendría info privilegiada.
-- Produce: score (1-10), confidence (0-1), recommendation (STRONG_BUY/BUY/HOLD/SKIP).
+La IA recibe toda la información del trade y produce un **reporte de investigación** detallado:
+
+- Busca en la web: noticias recientes, anuncios programados, leaks, rumores.
+- Analiza: quién tendría información privilegiada sobre este evento.
+- Evalúa: si la información pública justifica el trade o si sugiere conocimiento no público.
+- Produce: score (1-10), confidence (0-1), recommendation, y un reporte multi-párrafo explicando su investigación.
 - Si encuentra noticias que justifican el movimiento, reduce el score.
 - Cache de 6 horas por mercado. Límite: 50 calls/día.
 
+El reporte de investigación es visible en la página **Monitor** del frontend, donde se puede ver exactamente qué buscó la IA, qué encontró, y por qué llegó a su conclusión.
+
+**Sin IA no hay trades.** Si la IA no puede ejecutarse (API key faltante, límite diario alcanzado, error), la señal queda con recommendation=HOLD y confidence=0.3. Los errores se muestran en el frontend. Paper trades solo se abren cuando la IA confirma.
+
 ### 3. Paper Trading Engine
 
-Cuando una señal tiene score >= `MIN_SCORE_TO_TRADE` (5 por defecto), el bot abre una posición simulada:
+Cuando la IA confirma una señal con score >= `MIN_SCORE_TO_TRADE` (5 por defecto), el bot abre una posición simulada:
 
 **Position sizing (Half-Kelly Criterion):**
 
@@ -102,8 +109,8 @@ El tamaño se multiplica por la confidence de la IA (mínimo 30% del Kelly). El 
 
 El dashboard tiene 5 páginas:
 
-- **Dashboard** — portfolio value, equity curve, señales activas, posiciones abiertas, activity feed (solo eventos importantes).
-- **Monitor** — tabla de trades en la DB con market names, pipeline de detección con resultados de cada regla expandibles, razonamiento de la IA.
+- **Dashboard** — portfolio value, equity curve, señales activas, posiciones abiertas, activity feed (solo eventos importantes: señales, AI, trades).
+- **Monitor** — tabla de todos los trades en la DB, pipeline de detección con resultados de cada regla expandibles (click para ver por qué matcheó o no), reportes de investigación de la IA con hallazgos, errores de la IA cuando no puede ejecutarse.
 - **Signals** — lista filtrable de señales (por score, status, categoría).
 - **Trades** — historial de paper trades con P&L.
 - **Analytics** — métricas de rendimiento, win rate por score bracket, P&L por categoría, distribución de retornos.
@@ -199,6 +206,14 @@ sleep 15
 docker-compose -f docker-compose.prod.yml exec backend alembic upgrade head
 docker-compose -f docker-compose.prod.yml restart backend
 ```
+
+**Verificar que la IA esté configurada:**
+
+```bash
+docker-compose -f docker-compose.prod.yml logs backend | grep "starting_polymarket_bot"
+```
+
+Debe mostrar `ai_configured: true`. Si muestra `false` o `MISSING/INVALID`, editar `.env` con la API key correcta.
 
 ### Tests
 
