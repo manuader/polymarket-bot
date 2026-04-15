@@ -55,6 +55,10 @@ class RuleThresholds:
     consensus_min_usd: float = _base
     consensus_priority: int = 7
 
+    # Rule 9: BIG_BET
+    big_bet_min_usd: float = 20_000
+    big_bet_priority: int = 8
+
     # General — matches .env MIN_TRADE_USD
     min_trade_usd: float = _base
 

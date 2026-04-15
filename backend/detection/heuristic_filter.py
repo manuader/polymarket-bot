@@ -383,9 +383,27 @@ async def rule_bet_against_consensus(trade: Trade) -> RuleHit | None:
     return None
 
 
+async def rule_big_bet(trade: Trade) -> RuleHit | None:
+    """Rule 9: Any trade >= $20k automatically flagged for AI analysis."""
+    if trade.usd_value < thresholds.big_bet_min_usd:
+        return None
+
+    return RuleHit(
+        rule_name="BIG_BET",
+        priority=thresholds.big_bet_priority,
+        market_id=trade.market_id,
+        direction=trade.outcome,
+        trigger_wallets=[trade.taker_address or trade.maker_address or ""],
+        trigger_trade_ids=[trade.id] if trade.id else [],
+        total_suspicious_volume=trade.usd_value,
+        metadata={"usd_value": trade.usd_value},
+    )
+
+
 # All rules in order of evaluation
 ALL_RULES = [
     rule_coordinated_wallets,      # Highest priority (9) — strongest signal
+    rule_big_bet,                  # Priority 8 — any trade >= $20k
     rule_whale_new_account,        # Priority 8
     rule_volume_spike,             # Priority 8
     rule_pre_announcement,         # Priority 8
