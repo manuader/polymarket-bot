@@ -5,6 +5,7 @@ Produces an investigation report explaining the AI's research and reasoning.
 """
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 import anthropic
@@ -21,7 +22,7 @@ log = structlog.get_logger()
 settings = get_settings()
 
 MODEL = "claude-sonnet-4-20250514"
-MAX_TOKENS = 2500
+MAX_TOKENS = 4096
 CACHE_TTL_HOURS = 6
 
 _daily_calls = {"date": "", "count": 0}
@@ -179,7 +180,9 @@ IMPORTANT recommendation criteria:
 - HOLD: Score 4-5. Suspicious but not enough to trade on.
 - SKIP: Score 1-3. Not insider trading. Normal market activity.
 
-Be skeptical. Most large trades are NOT insider trading. Only recommend BUY/STRONG_BUY when you have strong evidence."""
+Be skeptical. Most large trades are NOT insider trading. Only recommend BUY/STRONG_BUY when you have strong evidence. 
+We are only interested in trades that will finish in a short period of time (30 days tops). If the trade finishes after 30 days DO NOT conduct the investigation. It is important to save tokens and ai costs.
+The shorter the time frame, the more suspicius (most insider trading happens in short time frames [1 minute, 15 minutes, 1 hour, 1 day])"""
 
 
 async def analyze_with_ai(
@@ -237,18 +240,37 @@ async def analyze_with_ai(
         output_tokens = getattr(response.usage, "output_tokens", 0)
         record_ai_usage(input_tokens, output_tokens)
 
-        # Extract text
+        # Extract text (some blocks from web_search have text=None)
         text = ""
         for block in response.content:
-            if hasattr(block, "text"):
+            if hasattr(block, "text") and block.text is not None:
                 text += block.text
 
         text = text.strip()
+        stop_reason = getattr(response, "stop_reason", "unknown")
+
+        # Handle empty response (model spent all tokens on web searches)
+        if not text:
+            log.error("ai_empty_response", stop_reason=stop_reason, blocks=len(response.content))
+            await log_activity(
+                event_type="ai_error", severity="error",
+                title=f"AI returned no text (stop_reason={stop_reason}, {len(response.content)} blocks)",
+                detail="The model used all tokens on web searches without producing a final answer. Will retry next time.",
+                market_id=market.condition_id,
+            )
+            return None
+
+        # Strip markdown code fences (```json ... ``` or ``` ... ```)
         if text.startswith("```"):
             text = text.split("\n", 1)[-1]
         if text.endswith("```"):
             text = text.rsplit("```", 1)[0]
         text = text.strip()
+
+        # Extract JSON object even if wrapped in prose
+        json_match = re.search(r"\{[\s\S]*\}", text)
+        if json_match:
+            text = json_match.group(0)
 
         result = json.loads(text)
 

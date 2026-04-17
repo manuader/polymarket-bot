@@ -102,7 +102,7 @@ export default function Monitor() {
         ) : (
           <div className="space-y-2">
             {pipeline.map((e) => (
-              <PipelineCard key={e.id} event={e} />
+              <PipelineCard key={e.id} event={e} onRetrySuccess={fetchAll} />
             ))}
           </div>
         )}
@@ -111,10 +111,37 @@ export default function Monitor() {
   );
 }
 
-function PipelineCard({ event }) {
+function PipelineCard({ event, onRetrySuccess }) {
   const [expanded, setExpanded] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState(null);
   const e = event;
   const m = e.metadata || {};
+
+  async function handleRetryAI(ev) {
+    ev.stopPropagation();
+    setRetrying(true);
+    setRetryError(null);
+    try {
+      const body = e.signal_id
+        ? { signal_id: e.signal_id }
+        : { market_id: e.market_id };
+      const res = await fetch("/api/signals/retry-ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || `HTTP ${res.status}`);
+      }
+      if (onRetrySuccess) onRetrySuccess();
+    } catch (err) {
+      setRetryError(err.message);
+    } finally {
+      setRetrying(false);
+    }
+  }
 
   const borderColor = {
     large_trade: "border-l-blue-500",
@@ -227,10 +254,41 @@ function PipelineCard({ event }) {
             </div>
           )}
 
-          {/* AI error */}
+          {/* AI error — with retry button */}
           {expanded && e.event_type === "ai_error" && (
             <div className="mt-2 bg-red-900/20 border border-red-500/20 rounded p-2 text-xs text-red-300">
-              {e.detail}
+              <div>{e.detail}</div>
+              {e.market_id && (
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    onClick={handleRetryAI}
+                    disabled={retrying}
+                    className="px-3 py-1 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded text-xs font-medium transition-colors"
+                  >
+                    {retrying ? "Retrying..." : "🔄 Retry AI Analysis"}
+                  </button>
+                  {retryError && <span className="text-red-400">{retryError}</span>}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Trade skipped — with retry button */}
+          {expanded && e.event_type === "trade_skipped" && (
+            <div className="mt-2 bg-orange-900/20 border border-orange-500/20 rounded p-2 text-xs text-orange-300">
+              <div>{e.detail}</div>
+              {(e.signal_id || e.market_id) && (
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    onClick={handleRetryAI}
+                    disabled={retrying}
+                    className="px-3 py-1 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded text-xs font-medium transition-colors"
+                  >
+                    {retrying ? "Retrying..." : "🔄 Retry AI Analysis"}
+                  </button>
+                  {retryError && <span className="text-red-400">{retryError}</span>}
+                </div>
+              )}
             </div>
           )}
         </div>

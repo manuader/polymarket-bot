@@ -1,13 +1,14 @@
-"""Signal endpoints: list, filter, detail."""
+"""Signal endpoints: list, filter, detail, retry AI."""
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_session
-from db.models import Signal, Market
+from db.models import Signal, Market, Wallet
 
 router = APIRouter(prefix="/api/signals", tags=["signals"])
 
@@ -118,4 +119,108 @@ async def signal_detail(
         "key_findings": s.key_findings,
         "detected_at": s.detected_at.isoformat() if s.detected_at else None,
         "status": s.status,
+    }
+
+
+class RetryAIRequest(BaseModel):
+    signal_id: Optional[int] = None
+    market_id: Optional[str] = None
+
+
+@router.post("/retry-ai")
+async def retry_ai_analysis(
+    body: RetryAIRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """Re-run AI analysis for a signal that failed or wasn't analyzed."""
+    from detection.ai_analyzer import analyze_with_ai
+    from detection.signal_manager import compute_composite_score
+    from detection.heuristic_filter import RuleHit
+    from config import get_settings
+    from activity import log_activity
+
+    settings = get_settings()
+
+    # Find signal
+    if body.signal_id:
+        result = await session.execute(select(Signal).where(Signal.id == body.signal_id))
+        signal = result.scalar_one_or_none()
+    elif body.market_id:
+        result = await session.execute(
+            select(Signal)
+            .where(Signal.market_id == body.market_id)
+            .order_by(Signal.detected_at.desc())
+            .limit(1)
+        )
+        signal = result.scalar_one_or_none()
+    else:
+        raise HTTPException(400, "Provide signal_id or market_id")
+
+    if not signal:
+        raise HTTPException(404, "Signal not found")
+
+    # Load market
+    market_result = await session.execute(
+        select(Market).where(Market.condition_id == signal.market_id)
+    )
+    market = market_result.scalar_one_or_none()
+    if not market:
+        raise HTTPException(404, "Market not found")
+
+    # Load wallets
+    wallets = []
+    if signal.trigger_wallets:
+        for addr in signal.trigger_wallets:
+            w_result = await session.execute(select(Wallet).where(Wallet.address == addr))
+            w = w_result.scalar_one_or_none()
+            if w:
+                wallets.append(w)
+
+    # Reconstruct RuleHit objects from signal data
+    rule_names = signal.signal_type.split("+") if signal.signal_type else ["UNKNOWN"]
+    hits = []
+    for rn in rule_names:
+        hits.append(RuleHit(
+            rule_name=rn,
+            priority=signal.score or 5,
+            market_id=signal.market_id,
+            direction=signal.direction or "YES",
+            trigger_wallets=signal.trigger_wallets or [],
+            trigger_trade_ids=signal.trigger_trade_ids or [],
+            total_suspicious_volume=signal.total_suspicious_volume or 0,
+        ))
+
+    # Run AI analysis
+    ai_result = await analyze_with_ai(hits, market, wallets)
+    if not ai_result:
+        raise HTTPException(502, "AI analysis failed — check logs for details")
+
+    # Recompute composite score with AI result
+    score, confidence, recommendation = compute_composite_score(hits, ai_result)
+
+    # Update signal
+    signal.score = score
+    signal.confidence = confidence
+    signal.recommendation = recommendation
+    signal.analysis = ai_result.get("investigation_report", ai_result.get("reasoning", ""))
+    signal.key_findings = ai_result.get("key_findings", [])
+    event = ai_result.get("upcoming_event")
+    event_date = ai_result.get("upcoming_event_date")
+    if event:
+        signal.web_context = f"Upcoming event: {event}"
+        if event_date:
+            signal.web_context += f" (date: {event_date})"
+
+    await session.commit()
+
+    # Open paper trade if score is high enough
+    if signal.score >= settings.min_score_to_trade:
+        from trading.paper_engine import process_signal
+        await process_signal(signal)
+
+    return {
+        "signal_id": signal.id,
+        "score": score,
+        "confidence": confidence,
+        "recommendation": recommendation,
     }
